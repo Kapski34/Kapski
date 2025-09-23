@@ -49,7 +49,7 @@ const getWeightFromMetadata = (modelXmlText: string): number | null => {
 };
 
 interface ModelMetrics {
-    dimensions: ModelDimensions;
+    dimensions: ModelDimensions | null;
     weight: number | null;
 }
 
@@ -182,7 +182,14 @@ const getMetricsFrom3mf = async (modelFile: File): Promise<ModelMetrics> => {
         }
         
         if (!foundVertices) {
-             throw new Error("No vertices found in the model file. The file may be empty or use a non-standard XML format.");
+            // Don't throw an error if no vertices are found. This could be an assembly file.
+            // Return what we could find (potentially weight from metadata). The main function
+            // will get dimensions from the rendered Three.js object.
+            const weightInKg = weightFromMetadata !== null ? weightFromMetadata / 1000 : null;
+            return {
+                dimensions: null,
+                weight: weightInKg,
+            };
         }
 
         const dimensions: ModelDimensions = {
@@ -286,12 +293,30 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
 
     // --- Step 1: Load Model and Get Metrics using file-specific reliable methods ---
     if (modelFile.name.toLowerCase().endsWith('.3mf')) {
-        const metrics = await getMetricsFrom3mf(modelFile);
-        dimensions = metrics.dimensions;
-        weight = metrics.weight;
-
         const loader = new ThreeMFLoader();
         objectToFrame = loader.parse(fileBuffer);
+
+        // Get dimensions from the fully loaded Three.js object, which is more robust.
+        // This correctly handles assemblies and complex files parsed by the loader.
+        const box = new THREE.Box3().setFromObject(objectToFrame);
+        if (box.isEmpty()) {
+            throw new Error("Could not compute a bounding box for the 3MF model. The file might not contain any visible geometry.");
+        }
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        dimensions = { x: size.x, y: size.y, z: size.z };
+
+        // Attempt to get weight from metadata. This is a non-critical enhancement.
+        // Our modified getMetricsFrom3mf will not throw if it can't find vertices,
+        // but we'll wrap it in a try/catch for other potential parsing errors.
+        try {
+            // This custom parser is now only used as a secondary source for weight.
+            const metrics = await getMetricsFrom3mf(modelFile);
+            weight = metrics.weight;
+        } catch (e) {
+            console.warn("Could not parse 3MF file for weight metadata. Proceeding without it.", e);
+            weight = null;
+        }
 
         // CRITICAL FIX: Do NOT override materials for 3MF files.
         // The 3MFLoader is smart enough to create its own materials based on the file content

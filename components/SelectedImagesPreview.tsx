@@ -20,6 +20,10 @@ const BASIC_COLORS = [
   { name: 'Brązowy', hex: '#78350F' },
   { name: 'Srebrny', hex: '#C0C0C0' },
   { name: 'Złoty', hex: '#E5B124' },
+  { name: 'Różowy', hex: '#EC4899' },
+  { name: 'Morski', hex: '#14B8A6' },
+  { name: 'Limonkowy', hex: '#84CC16' },
+  { name: 'Błękitny', hex: '#38BDF8' },
 ];
 
 export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ images, onImageUpdate, setColors }) => {
@@ -320,7 +324,7 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
                           <div className="w-5 h-5 rounded-full border-2 border-white/50 shadow-md" style={{ backgroundColor: colorReplaceState.sourceColor }}></div>
                           <span className="text-sm text-gray-400">na:</span>
                       </div>
-                      <div className="grid grid-cols-6 gap-2 my-2">
+                      <div className="grid grid-cols-8 gap-2 my-2">
                           {BASIC_COLORS.map(color => (
                               <button
                                   key={color.hex}

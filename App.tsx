@@ -207,6 +207,20 @@ export const App: React.FC = () => {
     });
   };
 
+  const handleDimensionsChange = (axis: keyof ModelDimensions, valueInCm: number) => {
+    if (!dimensions || isNaN(valueInCm)) return;
+  
+    const valueInMm = valueInCm * 10;
+  
+    setDimensions(prevDimensions => {
+      if (!prevDimensions) return null;
+      return {
+        ...prevDimensions,
+        [axis]: valueInMm,
+      };
+    });
+  };
+
   const handleGenerate = useCallback(async () => {
     if (!modelFile && imageFiles.length === 0) {
       setError('Proszę wgrać plik modelu 3D lub przynajmniej jedno zdjęcie.');
@@ -627,7 +641,7 @@ export const App: React.FC = () => {
 
           {hasContent && !isLoading && (
             <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
-              <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} colors={colors} condition={productCondition} dimensions={dimensions} weight={weight} />
+              <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={handleDimensionsChange} weight={weight} />
               {selectedImages.length > 0 && <SelectedImagesPreview images={selectedImages} onImageUpdate={handleImageUpdate} setColors={setColors} />}
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
