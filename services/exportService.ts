@@ -24,6 +24,8 @@ export interface BaseLinkerCredentials {
     inventoryId: number;
     storageId: string;
     priceGroupId: number;
+    categoryId?: number;
+    manufacturerId?: number;
     quantity: number;
     price: number;
 }
@@ -40,6 +42,17 @@ export interface PriceGroup {
     name: string;
     currency: string;
 }
+
+export interface Category {
+    category_id: number;
+    name: string;
+}
+
+export interface Manufacturer {
+    manufacturer_id: number;
+    name: string;
+}
+
 
 // --- WOOCOMMERCE IMAGE UPLOAD HELPER ---
 const uploadImagesToWooCommerce = async (credentials: WooCommerceCredentials, images: { name: string; blob: Blob }[]) => {
@@ -301,10 +314,45 @@ export const getInventoryPriceGroups = async (apiToken: string, inventoryId: num
     return data.price_groups as PriceGroup[];
 };
 
+/**
+ * Fetches the list of categories for a given inventory catalog from BaseLinker.
+ * @param apiToken The user's BaseLinker API token.
+ * @param inventoryId The ID of the inventory catalog.
+ * @returns A promise resolving to an array of Category objects.
+ */
+export const getInventoryCategories = async (apiToken: string, inventoryId: number): Promise<Category[]> => {
+    if (!inventoryId) {
+        return [];
+    }
+    const parameters = {
+        "inventory_id": inventoryId,
+    };
+    const data = await callBaseLinkerApi(apiToken, 'getInventoryCategories', parameters);
+
+    if (!data.categories || !Array.isArray(data.categories)) {
+        return [];
+    }
+    return data.categories as Category[];
+};
+
+/**
+ * Fetches the list of all manufacturers from BaseLinker.
+ * @param apiToken The user's BaseLinker API token.
+ * @returns A promise resolving to an array of Manufacturer objects.
+ */
+export const getInventoryManufacturers = async (apiToken: string): Promise<Manufacturer[]> => {
+    const data = await callBaseLinkerApi(apiToken, 'getInventoryManufacturers');
+    
+    if (!data.manufacturers || !Array.isArray(data.manufacturers)) {
+        return [];
+    }
+    return data.manufacturers as Manufacturer[];
+};
+
 
 // --- BASELINKER EXPORT ---
 export const exportToBaseLinker = async (credentials: BaseLinkerCredentials, productData: ProductData) => {
-    const { apiToken, inventoryId, storageId, priceGroupId, quantity, price } = credentials;
+    const { apiToken, inventoryId, storageId, priceGroupId, categoryId, manufacturerId, quantity, price } = credentials;
 
     try {
         // --- STEP 1: Prepare image data ---
@@ -343,6 +391,12 @@ export const exportToBaseLinker = async (credentials: BaseLinkerCredentials, pro
         }
         if (productData.ean) {
             addProductParameters.ean = productData.ean;
+        }
+        if (categoryId) {
+            addProductParameters.category_id = categoryId;
+        }
+        if (manufacturerId) {
+            addProductParameters.manufacturer_id = manufacturerId;
         }
         if (productData.condition) {
             addProductParameters.condition = productData.condition;

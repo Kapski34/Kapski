@@ -53,10 +53,12 @@ export interface PrintCost {
 export const App: React.FC = () => {
   const [modelFile, setModelFile] = useState<File | null>(null);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
+  const [additionalInfo, setAdditionalInfo] = useState<string>('');
   const [auctionTitle, setAuctionTitle] = useState<string>('');
   const [descriptionParts, setDescriptionParts] = useState<string[]>([]);
   const [sku, setSku] = useState<string>('');
   const [ean, setEan] = useState<string>('');
+  const [colors, setColors] = useState<string[]>([]);
   const [productCondition, setProductCondition] = useState<'new' | 'used' | 'refurbished'>('new');
   const [dimensions, setDimensions] = useState<ModelDimensions | null>(null);
   const [weight, setWeight] = useState<number | null>(null);
@@ -149,6 +151,7 @@ export const App: React.FC = () => {
       setDescriptionParts([]);
       setSku('');
       setEan('');
+      setColors([]);
       setProductCondition('new');
       setDimensions(null);
       setWeight(null);
@@ -158,6 +161,7 @@ export const App: React.FC = () => {
       setCostAnalysisResult(null);
       setCostAnalysisError(null);
       setPrintCost(null);
+      setAdditionalInfo('');
   }
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -210,7 +214,10 @@ export const App: React.FC = () => {
     }
 
     setIsLoading(true);
+    // Keep additionalInfo, but reset everything else
+    const currentAdditionalInfo = additionalInfo;
     resetState();
+    setAdditionalInfo(currentAdditionalInfo);
     
     try {
       let filesToProcess: File[] = [];
@@ -311,12 +318,19 @@ export const App: React.FC = () => {
       }
       
       setLoadingMessage('Generowanie opisu i wybór zdjęć...');
-      const { auctionTitle: generatedTitle, descriptionParts: generatedParts, selectedImageNames, sku: generatedSku, ean: generatedEan } = await generateAllegroDescription(filesToProcess, modelFileForContext);
+      const { auctionTitle: generatedTitle, descriptionParts: generatedParts, selectedImageNames, sku: generatedSku, ean: generatedEan, colors: generatedColors } = await generateAllegroDescription(filesToProcess, modelFileForContext, additionalInfo);
+      
+      // If the AI doesn't find an EAN, generate one automatically.
+      let finalEan = generatedEan;
+      if (!finalEan) {
+        finalEan = generateEan13();
+      }
       
       setAuctionTitle(generatedTitle);
       setDescriptionParts(generatedParts);
       setSku(generatedSku);
-      setEan(generatedEan);
+      setEan(finalEan);
+      setColors(generatedColors);
       
       let finalSelectedImageNames = selectedImageNames;
 
@@ -386,7 +400,7 @@ export const App: React.FC = () => {
     } finally {
       setIsLoading(false);
     }
-  }, [modelFile, imageFiles, costSettings]);
+  }, [modelFile, imageFiles, costSettings, additionalInfo]);
 
   const handleAnalyzeCost = async () => {
     if (!selectedImages[0] || !auctionTitle) {
@@ -410,14 +424,36 @@ export const App: React.FC = () => {
   
   const handleDownloadPackage = async () => {
     if (!selectedImages || !auctionTitle || descriptionParts.length === 0) return;
-    
+
     setIsPackaging(true);
 
     try {
         const zip = new JSZip();
+
+        // 1. Create folders for organization
+        const sourceFolder = zip.folder("_ZRODLOWE");
+        const generatedFolder = zip.folder("_WYGENEROWANE");
+
+        // 2. Add source files
+        if (modelFile) {
+            sourceFolder.file(modelFile.name, modelFile);
+        }
+        if (imageFiles.length > 0) {
+            for (const file of imageFiles) {
+                sourceFolder.file(file.name, file);
+            }
+        }
+
+        // 3. Add generated images
+        for (const image of selectedImages) {
+            generatedFolder.file(image.name, image.blob, { binary: true });
+        }
+
+        // 4. Add description file to the root
         let descriptionContent = `TYTUŁ AUKCJI:\n${auctionTitle}\n\n`;
         if (sku) descriptionContent += `SKU: ${sku}\n`;
         if (ean) descriptionContent += `EAN: ${ean}\n`;
+        if (colors.length > 0) descriptionContent += `KOLORY: ${colors.join(', ')}\n`;
         if (dimensions) {
             descriptionContent += `WYMIARY (SxWxG): ${(dimensions.x / 10).toFixed(2)} x ${(dimensions.y / 10).toFixed(2)} x ${(dimensions.z / 10).toFixed(2)} cm\n`;
         }
@@ -430,16 +466,15 @@ export const App: React.FC = () => {
         });
         zip.file("opis_aukcji.txt", descriptionContent);
 
-        for (const image of selectedImages) {
-            zip.file(image.name, image.blob, { binary: true });
-        }
-
+        // 5. Generate and download the zip
         const zipBlob = await zip.generateAsync({ type: "blob" });
         const url = URL.createObjectURL(zipBlob);
         const link = document.createElement('a');
         link.href = url;
-        const fileName = auctionTitle.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').substring(0, 50) || "pakiet-aukcji";
+        
+        const fileName = sku || auctionTitle.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').substring(0, 50) || "pakiet-aukcji";
         link.download = `${fileName}.zip`;
+        
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
@@ -496,10 +531,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleGenerateEan = () => {
-    setEan(generateEan13());
-  };
-
   const isButtonDisabled = !modelFile && imageFiles.length === 0 || isLoading;
   const hasContent = auctionTitle || descriptionParts.length > 0 || selectedImages.length > 0;
   
@@ -522,7 +553,7 @@ export const App: React.FC = () => {
                 title="Ustawienia kosztów wydruku"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                   <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
                 </svg>
               </button>
@@ -557,6 +588,20 @@ export const App: React.FC = () => {
                 helpText={imageHelpText}
                 multiple
               />
+              <div className="flex flex-col gap-2">
+                <label htmlFor="additional-info" className="text-md font-semibold text-gray-300">
+                  Dodatkowe informacje do opisu (opcjonalnie)
+                </label>
+                <textarea
+                  id="additional-info"
+                  value={additionalInfo}
+                  onChange={(e) => setAdditionalInfo(e.target.value)}
+                  placeholder="Np. 'Produkt pasuje do modelu X i Y', 'Dostępne również w kolorze niebieskim', 'W zestawie znajdują się śruby montażowe'"
+                  className="w-full h-24 p-3 bg-slate-900/70 border border-gray-700 rounded-lg text-gray-300 text-sm focus:ring-2 focus:ring-cyan-400 focus:outline-none resize-y"
+                  disabled={isLoading}
+                />
+                <p className="text-xs text-gray-500">Wpisz kluczowe dane, które AI ma zawrzeć w opisie, np. kompatybilność, cechy specjalne, zawartość zestawu.</p>
+              </div>
               <button
                 onClick={handleGenerate}
                 disabled={isButtonDisabled}
@@ -582,8 +627,8 @@ export const App: React.FC = () => {
 
           {hasContent && !isLoading && (
             <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
-              <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} condition={productCondition} dimensions={dimensions} weight={weight} onGenerateEan={handleGenerateEan} />
-              {selectedImages.length > 0 && <SelectedImagesPreview images={selectedImages} onImageUpdate={handleImageUpdate} />}
+              <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} colors={colors} condition={productCondition} dimensions={dimensions} weight={weight} />
+              {selectedImages.length > 0 && <SelectedImagesPreview images={selectedImages} onImageUpdate={handleImageUpdate} setColors={setColors} />}
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                 {printCost && <PrintCostEstimator cost={printCost} />}

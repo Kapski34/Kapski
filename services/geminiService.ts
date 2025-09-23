@@ -95,14 +95,24 @@ const fileToGenerativePart = async (file: Blob, fileName: string = 'image.png'):
 };
 
 const buildBasePrompt = (
-    modelFileName: string | null
+    modelFileName: string | null,
+    additionalInfo: string
 ): string => {
     const fileSourceInstruction = modelFileName
     ? `na podstawie załączonych zdjęć produktu oraz nazwy pliku modelu 3D: "${modelFileName}"`
     : `na podstawie załączonych zdjęć produktu`;
 
+    const additionalInfoSection = additionalInfo.trim()
+    ? `
+**Informacje Dodatkowe od Użytkownika (NAJWYŻSZY PRIORYTET):**
+Użytkownik dostarczył następujące kluczowe informacje, które MUSISZ uwzględnić i wpleść w treść opisu w naturalny i logiczny sposób. Potraktuj te dane jako absolutnie najważniejsze źródło prawdy o produkcie:
+"${additionalInfo.trim()}"
+`
+    : '';
+
   return `
 Jesteś elitarnym strategiem e-commerce i kreatywnym copywriterem, specjalizującym się w tworzeniu wysokokonwersyjnych opisów na Allegro. Twoim celem jest stworzenie opisu, który nie tylko informuje, ale przede wszystkim sprzedaje, budując w kliencie poczucie potrzeby i ekscytacji. Masz za zadanie wygenerowanie kompletnych danych do aukcji ${fileSourceInstruction}.
+${additionalInfoSection}
 
 **NAJWAŻNIEJSZA ZASADA: Zwięzłość i Treściwość!**
 Pisz krótko, ale mocno w przekazie. Każdy akapit musi być łatwy do szybkiego przeczytania i zrozumienia. Unikaj zbędnych słów i "lania wody". Używaj prostego, bezpośredniego języka.
@@ -113,6 +123,7 @@ Twoje zadania:
 3.  **Wygeneruj Identyfikatory Produktu (SKU i EAN):**
     - **SKU:** Stwórz unikalny, opisowy kod SKU na podstawie nazwy produktu. Format: Główne słowa kluczowe oddzielone myślnikami, pisane wielkimi literami. Przykład: UCHWYT-SCIENNY-PAD-PS5.
     - **EAN:** Dokładnie przeanalizuj wszystkie dostarczone zdjęcia w poszukiwaniu kodu kreskowego. Jeśli znajdziesz czytelny kod EAN, zwróć jego numer. Jeśli na żadnym zdjęciu nie ma kodu kreskowego lub jest on nieczytelny, zwróć pusty ciąg znaków (""). Nie wymyślaj numeru EAN.
+4.  **Wygeneruj Listę Kolorów:** Przeanalizuj zdjęcia i zidentyfikuj wszystkie DISTINCT kolory potrzebne do wydrukowania przedmiotu. Zwróć je jako listę nazw kolorów. Bądź precyzyjny (np. "Czarny", "Czerwony", "Biały"). Jeśli przedmiot jest jednokolorowy, zwróć listę z jednym kolorem.
 
 ---
 
@@ -142,14 +153,15 @@ Zbierz kluczowe informacje logistyczne i zamknij sprzedaż. Bądź bezpośredni 
 
 const buildUnifiedPrompt = (
     modelFileName: string | null,
-    imageFileNames: string[]
+    imageFileNames: string[],
+    additionalInfo: string
 ): string => {
   const imageCountInstruction = imageFileNames.length > 4 
     ? `Z dostarczonej listy ${imageFileNames.length} zdjęć, wybierz 4 najlepsze, które najlepiej zaprezentują produkt.`
     : `Przeanalizuj dostarczone ${imageFileNames.length} zdjęcia i uszereguj je w optymalnej kolejności do prezentacji na aukcji.`;
 
   return `
-${buildBasePrompt(modelFileName)}
+${buildBasePrompt(modelFileName, additionalInfo)}
 
 **Instrukcja Dodatkowa (NAJWAŻNIEJSZA): Analiza i Selekcja Zdjęć**
 
@@ -176,8 +188,9 @@ Zwróć odpowiedź w formacie JSON, ściśle przestrzegając poniższego schemat
 
 export const generateAllegroDescription = async (
   imageFiles: File[],
-  modelFile: File | null
-): Promise<{ auctionTitle: string; descriptionParts: string[]; selectedImageNames: string[], sku: string; ean: string; }> => {
+  modelFile: File | null,
+  additionalInfo: string
+): Promise<{ auctionTitle: string; descriptionParts: string[]; selectedImageNames: string[], sku: string; ean: string; colors: string[] }> => {
   if (!process.env.API_KEY) {
     throw new Error("API key not configured.");
   }
@@ -190,7 +203,7 @@ export const generateAllegroDescription = async (
   const modelFileName = modelFile?.name || null;
   
   const imageFileNames = imageFiles.map(f => f.name);
-  const textPrompt = buildUnifiedPrompt(modelFileName, imageFileNames);
+  const textPrompt = buildUnifiedPrompt(modelFileName, imageFileNames, additionalInfo);
 
   const imageContentParts = await Promise.all(
       imageFiles.map(file => fileToGenerativePart(file, file.name))
@@ -222,8 +235,13 @@ export const generateAllegroDescription = async (
         type: Type.STRING,
         description: 'Numer EAN (kod kreskowy) produktu, jeśli został zidentyfikowany na zdjęciu. W przeciwnym razie pusty string.',
       },
+      colors: {
+        type: Type.ARRAY,
+        description: 'Tablica zawierająca nazwy kolorów potrzebnych do wydruku przedmiotu.',
+        items: { type: Type.STRING },
+      },
     },
-    propertyOrdering: ["auction_title", "description_parts", "selected_images", "sku", "ean"],
+    propertyOrdering: ["auction_title", "description_parts", "selected_images", "sku", "ean", "colors"],
   };
 
 
@@ -253,6 +271,7 @@ export const generateAllegroDescription = async (
     selectedImageNames: selectedImageNames,
     sku: jsonResponse.sku || '',
     ean: jsonResponse.ean || '',
+    colors: jsonResponse.colors || [],
   };
 };
 
@@ -359,6 +378,82 @@ Zastosuj te zmiany i zwróć wyłącznie finalny obraz.
         return [];
     }
 };
+
+export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, targetColorHex: string): Promise<Blob> => {
+    if (!process.env.API_KEY) {
+        throw new Error("API key not configured.");
+    }
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    
+    const imagePart = await fileToGenerativePart(imageFile);
+    const textPart = { text: `Twoim zadaniem jest precyzyjna zamiana koloru na zdjęciu. Znajdź wszystkie obszary na obrazie, które mają kolor zbliżony do wartości szesnastkowej "${sourceColorHex}". Zastąp ten kolor nowym kolorem o wartości szesnastkowej "${targetColorHex}". Zrób to w sposób inteligentny: zachowaj oryginalną teksturę, cienie i oświetlenie. Nie zmieniaj żadnych innych kolorów na zdjęciu. Zwróć tylko i wyłącznie obraz wynikowy.` };
+
+    const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image-preview',
+        contents: { parts: [imagePart, textPart] },
+        config: {
+            responseModalities: [Modality.IMAGE, Modality.TEXT],
+        },
+    });
+
+    const imageResponsePart = response.candidates?.[0]?.content?.parts?.find(part => part.inlineData);
+
+    if (!imageResponsePart || !imageResponsePart.inlineData) {
+        throw new Error("AI nie zwróciło obrazu po próbie zmiany koloru. Spróbuj ponownie z innym opisem koloru.");
+    }
+
+    const base64Data = imageResponsePart.inlineData.data;
+    const mimeType = imageResponsePart.inlineData.mimeType;
+    const fetchResponse = await fetch(`data:${mimeType};base64,${base64Data}`);
+    const newBlob = await fetchResponse.blob();
+
+    return newBlob;
+};
+
+export const getColorsFromImages = async (images: { name: string; blob: Blob }[]): Promise<string[]> => {
+  if (!process.env.API_KEY) {
+    throw new Error("API key not configured.");
+  }
+  if (images.length === 0) {
+      return [];
+  }
+  
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+
+  const textPrompt = `Jesteś ekspertem od druku 3D. Przeanalizuj te zdjęcia i zidentyfikuj wszystkie unikalne kolory potrzebne do wydrukowania widocznego na nich przedmiotu. Zwróć odpowiedź jako listę nazw kolorów w formacie JSON. Bądź precyzyjny (np. "Czarny", "Czerwony", "Biały"). Jeśli przedmiot jest jednokolorowy, zwróć listę z jednym kolorem.`;
+
+  const imageContentParts = await Promise.all(
+      images.map(image => fileToGenerativePart(image.blob, image.name))
+  );
+  const contentParts = [...imageContentParts, { text: textPrompt }];
+
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      colors: {
+        type: Type.ARRAY,
+        description: 'Tablica zawierająca nazwy kolorów potrzebnych do wydruku przedmiotu.',
+        items: { type: Type.STRING },
+      },
+    },
+    propertyOrdering: ["colors"],
+  };
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: { parts: contentParts },
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: responseSchema,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  });
+
+  const jsonResponse = parseJsonResponse(response.text);
+
+  return jsonResponse.colors || [];
+};
+
 
 export const analyzePricing = async (
   imageFile: Blob,

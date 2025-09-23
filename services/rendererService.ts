@@ -272,15 +272,15 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     let weight: number | null;
     let objectToFrame: THREE.Object3D;
     const geometriesToDispose: THREE.BufferGeometry[] = [];
+    const materialsToDispose: THREE.Material[] = [];
     
-    // A high-quality default material for monochrome models (STL or 3MF without color).
-    // It's a lighter gray for better detail visibility and crucially enables vertex colors.
-    const material = new THREE.MeshStandardMaterial({
+    // A high-quality default material for monochrome models (STL).
+    const stlMaterial = new THREE.MeshStandardMaterial({
         color: 0xcccccc, 
         metalness: 0.2,
         roughness: 0.5,
-        vertexColors: true // This is the key change to allow 3MF vertex colors to be displayed
     });
+    materialsToDispose.push(stlMaterial);
     
     const fileBuffer = await modelFile.arrayBuffer();
 
@@ -293,18 +293,18 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         const loader = new ThreeMFLoader();
         objectToFrame = loader.parse(fileBuffer);
 
-        // Traverse the loaded model. If a mesh was loaded without vertex colors
-        // (i.e., it's a monochrome part), apply our high-quality default material
-        // to give it a better appearance. This preserves colors when they exist.
+        // CRITICAL FIX: Do NOT override materials for 3MF files.
+        // The 3MFLoader is smart enough to create its own materials based on the file content
+        // (including vertex colors, base colors, etc.). Overriding them destroys color information.
+        // We only traverse to collect geometries and materials for later disposal.
         objectToFrame.traverse((child) => {
             if (child instanceof THREE.Mesh) {
-                const meshMaterial = child.material as THREE.Material;
-                // Check if material is an array (multi-material), don't touch it for now.
-                // Check if the material already uses vertex colors, if so, leave it.
-                if (!Array.isArray(meshMaterial) && !meshMaterial.vertexColors) {
-                    child.material = material;
-                }
                 geometriesToDispose.push(child.geometry);
+                if (Array.isArray(child.material)) {
+                    materialsToDispose.push(...child.material);
+                } else {
+                    materialsToDispose.push(child.material);
+                }
             }
         });
     } else { // Handle .stl
@@ -319,8 +319,17 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         const weightInGrams = volume * PLA_DENSITY_G_PER_MM3;
         weight = weightInGrams / 1000; // Convert to KG
 
-        objectToFrame = new THREE.Mesh(geometry, material);
+        objectToFrame = new THREE.Mesh(geometry, stlMaterial);
     }
+    
+    // --- Reorient dimensions for sales context ---
+    // The "height" should always be the largest dimension, regardless of model orientation in the file.
+    const sortedDims = [dimensions.x, dimensions.y, dimensions.z].sort((a, b) => b - a);
+    dimensions = {
+        x: sortedDims[1], // width (middle value)
+        y: sortedDims[0], // height (largest value)
+        z: sortedDims[2], // depth (smallest value)
+    };
     
     if (!objectToFrame) {
         throw new Error('Model file could not be parsed or loaded by Three.js.');
@@ -392,7 +401,7 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     } finally {
         // --- Step 6: Cleanup ---
         renderer.dispose();
-        material.dispose();
+        materialsToDispose.forEach(m => m.dispose());
         geometriesToDispose.forEach(g => g.dispose());
     }
 };

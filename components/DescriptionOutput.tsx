@@ -7,15 +7,15 @@ interface DescriptionOutputProps {
   descriptionParts: string[];
   sku: string;
   ean: string;
+  colors: string[];
   condition: string;
   dimensions: ModelDimensions | null;
   weight: number | null;
-  onGenerateEan?: () => void;
 }
 
 const descriptionLabels = ["Opis", "Opis dodatkowy 1", "Opis dodatkowy 2", "Opis dodatkowy 3"];
 
-export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTitle, descriptionParts, sku, ean, condition, dimensions, weight, onGenerateEan }) => {
+export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTitle, descriptionParts, sku, ean, colors, condition, dimensions, weight }) => {
   const hasContent = auctionTitle || descriptionParts.length > 0;
 
   if (!hasContent) {
@@ -59,18 +59,17 @@ export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTit
                 label="EAN"
                 content={ean}
                 height="h-20"
-                action={!ean && onGenerateEan ? (
-                    <button
-                        onClick={onGenerateEan}
-                        className="px-3 py-1.5 text-xs font-medium rounded-md transition-colors duration-200 flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white"
-                        title="Generuj losowy kod EAN-13 do użytku wewnętrznego"
-                    >
-                        🪄
-                        <span>Generuj</span>
-                    </button>
-                ) : undefined}
             />
         )}
+
+        {colors.length > 0 && (
+            <CopyableOutput
+                label="Wymagane kolory"
+                content={colors.join(', ')}
+                height="h-20"
+            />
+        )}
+
 
         {dimensions && (
           <>
