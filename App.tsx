@@ -13,6 +13,7 @@ import { CostAnalysis, CostAnalysisResult } from './components/CostAnalysis';
 import { generateEan13 } from './services/eanGenerator';
 import { CostSettingsModal } from './components/CostSettingsModal';
 import { PrintCostEstimator } from './components/PrintCostEstimator';
+import { HelpModal } from './components/HelpModal';
 
 // This lets TypeScript know about the JSZip global variable from the script tag
 declare const JSZip: any;
@@ -86,6 +87,7 @@ export const App: React.FC = () => {
     otherCostsPercentage: 15,
   });
   const [printCost, setPrintCost] = useState<PrintCost | null>(null);
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState<boolean>(false);
   
   useEffect(() => {
     try {
@@ -557,7 +559,7 @@ export const App: React.FC = () => {
   return (
     <div className="min-h-screen bg-slate-900 text-gray-200 flex flex-col items-center p-4 sm:p-6 lg:p-8">
       <div className="w-full max-w-5xl">
-        <Header />
+        <Header onHelpClick={() => setIsHelpModalOpen(true)} />
         <main className="relative mt-8 bg-slate-800/50 rounded-2xl shadow-2xl shadow-cyan-500/10 p-6 sm:p-8 backdrop-blur-sm border border-cyan-500/20">
           
           <div className="absolute top-4 right-4">
@@ -690,6 +692,11 @@ export const App: React.FC = () => {
             onClose={() => setIsCostSettingsModalOpen(false)}
             settings={costSettings}
             onSave={handleSaveCostSettings}
+        />
+        
+        <HelpModal
+            isOpen={isHelpModalOpen}
+            onClose={() => setIsHelpModalOpen(false)}
         />
 
       </div>
