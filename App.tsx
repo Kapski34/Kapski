@@ -4,13 +4,12 @@ import { FileUpload } from './components/FileUpload';
 import { ImagePreview } from './components/ImagePreview';
 import { DescriptionOutput } from './components/DescriptionOutput';
 import { Loader } from './components/Loader';
-import { generateAllegroDescription, addWhiteBackground, analyzePricing, generateAdditionalImages } from './services/geminiService';
+import { generateAllegroDescription, addWhiteBackground, analyzePricing, generateAdditionalImages, updateDescriptionColor, getColorsFromImages } from './services/geminiService';
 import { generateImagesFromModel } from './services/rendererService';
 import { SelectedImagesPreview } from './components/SelectedImagesPreview';
 import { ExportModal, ExportPlatform } from './components/ExportModal';
 import { exportToWooCommerce, exportToBaseLinker, BaseLinkerCredentials } from './services/exportService';
 import { CostAnalysis, CostAnalysisResult } from './components/CostAnalysis';
-import { generateEan13 } from './services/eanGenerator';
 import { CostSettingsModal } from './components/CostSettingsModal';
 import { PrintCostEstimator } from './components/PrintCostEstimator';
 
@@ -86,6 +85,7 @@ export const App: React.FC = () => {
     otherCostsPercentage: 15,
   });
   const [printCost, setPrintCost] = useState<PrintCost | null>(null);
+  const [includeHiveId, setIncludeHiveId] = useState<boolean>(false);
   
   useEffect(() => {
     try {
@@ -162,10 +162,12 @@ export const App: React.FC = () => {
       setCostAnalysisError(null);
       setPrintCost(null);
       setAdditionalInfo('');
+      setIncludeHiveId(false);
   }
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files ? Array.from(e.target.files) : [];
+    // Fix: Cast to File[] to avoid 'unknown' type errors
+    const files = e.target.files ? Array.from(e.target.files) as File[] : [];
     
     resetState();
 
@@ -180,19 +182,34 @@ export const App: React.FC = () => {
         setImageFiles([zipFile]);
         if (files.length > 1) {
             setError("Wybrano plik ZIP. Inne pliki zostały zignorowane.");
-        }
-    } else {
-        const imageFilesOnly = files.filter(f => f.type.startsWith('image/'));
-        if (imageFilesOnly.length > 4) {
-            setImageFiles(imageFilesOnly.slice(0, 4));
-            setError("Możesz wybrać maksymalnie 4 zdjęcia. Wybrano pierwsze cztery.");
-        } else if (imageFilesOnly.length > 0) {
-             setImageFiles(imageFilesOnly);
         } else {
-             setImageFiles([]);
-             setError("Wybrane pliki nie są obsługiwanymi obrazami. Proszę wybrać pliki JPG, PNG, GIF lub WEBP.");
+            setError(null);
         }
+        return;
     }
+    
+    const supportedImageTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    const selectedImages = files.filter(f => supportedImageTypes.includes(f.type));
+    
+    let currentError: string | null = null;
+    if (selectedImages.length !== files.length) {
+        currentError = "Niektóre pliki zostały zignorowane, ponieważ nie są obsługiwanymi obrazami (JPG, PNG, GIF, WEBP).";
+    }
+
+    if (selectedImages.length === 0) {
+        setImageFiles([]);
+        setError("Wybrane pliki nie są obsługiwanymi obrazami. Proszę wybrać pliki JPG, PNG, GIF lub WEBP.");
+        return;
+    }
+    
+    if (selectedImages.length > 4) {
+        setImageFiles(selectedImages.slice(0, 4));
+        currentError = (currentError ? currentError + " " : "") + "Możesz wybrać maksymalnie 4 zdjęcia. Wybrano pierwsze cztery.";
+    } else {
+        setImageFiles(selectedImages);
+    }
+
+    setError(currentError);
   };
 
   const handleImageUpdate = (originalName: string, newBlob: Blob) => {
@@ -207,6 +224,31 @@ export const App: React.FC = () => {
     });
   };
 
+  const handleColorUpdate = async (updatedImages: { name: string; blob: Blob }[]) => {
+    try {
+      const colorsPromise = getColorsFromImages(updatedImages);
+      
+      const descriptionPromise = (descriptionParts.length > 0)
+        ? colorsPromise.then(newColors => {
+            if (newColors.length > 0) {
+              return updateDescriptionColor(descriptionParts, newColors);
+            }
+            return descriptionParts;
+          })
+        : Promise.resolve(descriptionParts);
+
+      const [newColors, newDescriptionParts] = await Promise.all([colorsPromise, descriptionPromise]);
+      
+      setDescriptionParts(newDescriptionParts);
+      setColors(newColors);
+
+    } catch (err) {
+      console.error("Error updating colors and description:", err);
+      const errorMessage = err instanceof Error ? err.message : 'Wystąpił błąd podczas aktualizacji opisu na podstawie nowego koloru.';
+      setError(errorMessage);
+    }
+  };
+
   const handleDimensionsChange = (axis: keyof ModelDimensions, valueInCm: number) => {
     if (!dimensions || isNaN(valueInCm)) return;
   
@@ -219,6 +261,19 @@ export const App: React.FC = () => {
         [axis]: valueInMm,
       };
     });
+  };
+
+  const handleWeightChange = (newWeightKg: number) => {
+    setWeight(newWeightKg);
+    if (newWeightKg > 0) {
+      calculatePrintCost(newWeightKg, costSettings);
+    } else {
+      setPrintCost(null);
+    }
+  };
+
+  const handleEanChange = (newEan: string) => {
+    setEan(newEan);
   };
 
   const handleGenerate = useCallback(async () => {
@@ -249,10 +304,11 @@ export const App: React.FC = () => {
             const zip = await JSZip.loadAsync(modelFile);
             const modelPromises: Promise<File>[] = [];
 
+            // Fix: Explicitly type `zipEntry` as `any` to avoid "unknown" type errors in strict mode.
             zip.forEach((_: string, zipEntry: any) => {
                 const isMacJunk = zipEntry.name.startsWith('__MACOSX/') || zipEntry.name.split('/').pop()?.startsWith('._');
                 if (!zipEntry.dir && !isMacJunk && /\.(stl|3mf)$/i.test(zipEntry.name)) {
-                    const promise = zipEntry.async('blob').then((blob: Blob) => {
+                    const promise = zipEntry.async('blob').then((blob: any) => {
                         const fileName = zipEntry.name.substring(zipEntry.name.lastIndexOf('/') + 1);
                         const fileType = fileName.toLowerCase().endsWith('.stl') ? 'model/stl' : 'model/3mf';
                         return new File([blob], fileName, { type: fileType });
@@ -295,10 +351,11 @@ export const App: React.FC = () => {
           if (isSingleZip) {
               const zip = await JSZip.loadAsync(imageFiles[0]);
               const imagePromises: Promise<File>[] = [];
+              // Fix: Explicitly type `zipEntry` as `any` to avoid "unknown" type errors.
               zip.forEach((_: string, zipEntry: any) => {
                   const isMacJunk = zipEntry.name.startsWith('__MACOSX/') || zipEntry.name.split('/').pop()?.startsWith('._');
                   if (!zipEntry.dir && !isMacJunk && /\.(jpe?g|png|gif|webp)$/i.test(zipEntry.name)) {
-                      const promise = zipEntry.async('blob').then((blob: Blob) => {
+                      const promise = zipEntry.async('blob').then((blob: any) => {
                           const fileName = zipEntry.name.substring(zipEntry.name.lastIndexOf('/') + 1);
                           return new File([blob], fileName, { type: blob.type });
                       });
@@ -334,16 +391,10 @@ export const App: React.FC = () => {
       setLoadingMessage('Generowanie opisu i wybór zdjęć...');
       const { auctionTitle: generatedTitle, descriptionParts: generatedParts, selectedImageNames, sku: generatedSku, ean: generatedEan, colors: generatedColors } = await generateAllegroDescription(filesToProcess, modelFileForContext, additionalInfo);
       
-      // If the AI doesn't find an EAN, generate one automatically.
-      let finalEan = generatedEan;
-      if (!finalEan) {
-        finalEan = generateEan13();
-      }
-      
       setAuctionTitle(generatedTitle);
       setDescriptionParts(generatedParts);
       setSku(generatedSku);
-      setEan(finalEan);
+      setEan(generatedEan || '');
       setColors(generatedColors);
       
       let finalSelectedImageNames = selectedImageNames;
@@ -464,6 +515,11 @@ export const App: React.FC = () => {
         }
 
         // 4. Add description file to the root
+        const finalDescriptionParts = [...descriptionParts];
+        if (includeHiveId && finalDescriptionParts.length > 3 && finalDescriptionParts[3]) {
+            finalDescriptionParts[3] = `${finalDescriptionParts[3]}\n\nHive ID: R256CX12EK`;
+        }
+        
         let descriptionContent = `TYTUŁ AUKCJI:\n${auctionTitle}\n\n`;
         if (sku) descriptionContent += `SKU: ${sku}\n`;
         if (ean) descriptionContent += `EAN: ${ean}\n`;
@@ -475,7 +531,7 @@ export const App: React.FC = () => {
             descriptionContent += `SZAC. WAGA: ${weight.toFixed(3)} kg\n`;
         }
         descriptionContent += "========================================\n\n";
-        descriptionParts.forEach((part, index) => {
+        finalDescriptionParts.forEach((part, index) => {
             descriptionContent += `PARAGRAF ${index + 1}:\n${part}\n\n`;
         });
         zip.file("opis_aukcji.txt", descriptionContent);
@@ -486,7 +542,7 @@ export const App: React.FC = () => {
         const link = document.createElement('a');
         link.href = url;
         
-        const fileName = sku || auctionTitle.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').substring(0, 50) || "pakiet-aukcji";
+        const fileName = ean || sku || auctionTitle.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').substring(0, 50) || "pakiet-aukcji";
         link.download = `${fileName}.zip`;
         
         document.body.appendChild(link);
@@ -514,11 +570,16 @@ export const App: React.FC = () => {
     
     setExportStatus('exporting');
     setExportError(null);
+    
+    const finalDescriptionParts = [...descriptionParts];
+    if (includeHiveId && finalDescriptionParts.length > 3 && finalDescriptionParts[3]) {
+        finalDescriptionParts[3] = `${finalDescriptionParts[3]}\n\nHive ID: R256CX12EK`;
+    }
 
     const productData = {
         title: auctionTitle,
-        description: descriptionParts.join('<br /><br />'),
-        descriptionParts: descriptionParts, // Pass the array for BaseLinker
+        description: finalDescriptionParts.join('<br /><br />'),
+        descriptionParts: finalDescriptionParts, // Pass the array for BaseLinker
         images: selectedImages,
         sku: sku,
         ean: ean,
@@ -591,7 +652,7 @@ export const App: React.FC = () => {
               <FileUpload 
                 id="image-upload" 
                 label="LUB wgraj zdjęcia" 
-                accept="image/*,.zip" 
+                accept="image/jpeg,image/png,image/gif,image/webp,.zip" 
                 onChange={handleImageFileChange} 
                 fileName={getImageFileNamesText()} 
                 icon={
@@ -641,8 +702,22 @@ export const App: React.FC = () => {
 
           {hasContent && !isLoading && (
             <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
-              <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={handleDimensionsChange} weight={weight} />
-              {selectedImages.length > 0 && <SelectedImagesPreview images={selectedImages} onImageUpdate={handleImageUpdate} setColors={setColors} />}
+              <DescriptionOutput 
+                auctionTitle={auctionTitle} 
+                descriptionParts={descriptionParts} 
+                sku={sku} 
+                ean={ean} 
+                onEanChange={handleEanChange}
+                colors={colors} 
+                condition={productCondition} 
+                dimensions={dimensions} 
+                onDimensionsChange={handleDimensionsChange} 
+                weight={weight}
+                onWeightChange={handleWeightChange}
+                includeHiveId={includeHiveId}
+                onIncludeHiveIdChange={setIncludeHiveId}
+              />
+              {selectedImages.length > 0 && <SelectedImagesPreview images={selectedImages} onImageUpdate={handleImageUpdate} onColorChange={handleColorUpdate} />}
               
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                 {printCost && <PrintCostEstimator cost={printCost} />}
@@ -673,25 +748,26 @@ export const App: React.FC = () => {
             </div>
           )}
         </main>
-
-        {isExportModalOpen && exportPlatform && (
+        
+        {isExportModalOpen && (
           <ExportModal
             isOpen={isExportModalOpen}
             onClose={() => setIsExportModalOpen(false)}
-            platform={exportPlatform}
+            platform={exportPlatform!}
             onExport={handlePerformExport}
             status={exportStatus}
             error={exportError}
           />
         )}
         
-        <CostSettingsModal
-            isOpen={isCostSettingsModalOpen}
-            onClose={() => setIsCostSettingsModalOpen(false)}
-            settings={costSettings}
-            onSave={handleSaveCostSettings}
-        />
-
+        {isCostSettingsModalOpen && (
+            <CostSettingsModal
+                isOpen={isCostSettingsModalOpen}
+                onClose={() => setIsCostSettingsModalOpen(false)}
+                settings={costSettings}
+                onSave={handleSaveCostSettings}
+            />
+        )}
       </div>
     </div>
   );

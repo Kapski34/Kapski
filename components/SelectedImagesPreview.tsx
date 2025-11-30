@@ -4,7 +4,7 @@ import { addWhiteBackground, changeImageColor, getColorsFromImages } from '../se
 interface SelectedImagesPreviewProps {
   images: { name: string; blob: Blob }[];
   onImageUpdate: (originalName: string, newBlob: Blob) => void;
-  setColors: React.Dispatch<React.SetStateAction<string[]>>;
+  onColorChange: (updatedImages: { name: string; blob: Blob }[]) => Promise<void>;
 }
 
 const BASIC_COLORS = [
@@ -26,7 +26,7 @@ const BASIC_COLORS = [
   { name: 'Błękitny', hex: '#38BDF8' },
 ];
 
-export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ images, onImageUpdate, setColors }) => {
+export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ images, onImageUpdate, onColorChange }) => {
   const [downloadingImage, setDownloadingImage] = useState<string | null>(null);
   const [processingImages, setProcessingImages] = useState<string[]>([]);
   const [editError, setEditError] = useState<string | null>(null);
@@ -243,14 +243,7 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
                 const updatedBlob = updatedBlobs.get(img.name);
                 return updatedBlob ? { ...img, blob: updatedBlob } : img;
             });
-
-            try {
-                const newColors = await getColorsFromImages(nextImagesState);
-                setColors(newColors);
-            } catch (colorError) {
-                console.error("Failed to update color list after edit:", colorError);
-                setEditError(prev => `${prev ? prev + ' ' : ''}Nie udało się odświeżyć listy kolorów.`);
-            }
+            await onColorChange(nextImagesState);
         }
         
     } catch (err) {

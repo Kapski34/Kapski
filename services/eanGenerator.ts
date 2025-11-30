@@ -29,12 +29,13 @@ const calculateEan13Checksum = (twelveDigits: string): string => {
 /**
  * Generates a random, valid EAN-13 barcode number.
  * The generated codes are for placeholder/internal use and are not registered with GS1.
- * It uses a prefix common for private/internal use to avoid collision with real products.
+ * It uses the Polish GS1 prefix to comply with Allegro's validation rules.
  * @returns A 13-digit EAN code as a string.
  */
 export const generateEan13 = (): string => {
-    // GS1 prefixes 200-299 are for internal/in-store use, which is perfect for this.
-    const prefix = "290"; 
+    // Używamy polskiego prefiksu GS1 (590), aby generować numery EAN, które są zgodne z wymaganiami Allegro
+    // i unikają zastrzeżonych zakresów dla użytku wewnętrznego (200-299), które są odrzucane.
+    const prefix = "590"; 
     let randomPart = '';
     for (let i = 0; i < 9; i++) {
         randomPart += Math.floor(Math.random() * 10).toString();

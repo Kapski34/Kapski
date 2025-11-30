@@ -285,10 +285,10 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
   const textPart = { text: "Isolate the main subject from its background. Place the subject on a solid, pure white background (#FFFFFF). The output image should have the same dimensions as the original. Do not add any text or other elements." };
 
   const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image-preview',
+    model: 'gemini-2.5-flash-image',
     contents: { parts: [imagePart, textPart] },
     config: {
-        responseModalities: [Modality.IMAGE, Modality.TEXT],
+        responseModalities: [Modality.IMAGE],
     },
   });
 
@@ -350,10 +350,10 @@ Zastosuj te zmiany i zwróć wyłącznie finalny obraz.
 
     try {
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-image-preview',
+            model: 'gemini-2.5-flash-image',
             contents: { parts: [imagePart, textPart] },
             config: {
-                responseModalities: [Modality.IMAGE, Modality.TEXT],
+                responseModalities: [Modality.IMAGE],
             },
         });
 
@@ -389,10 +389,10 @@ export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, 
     const textPart = { text: `Twoim zadaniem jest precyzyjna zamiana koloru na zdjęciu. Znajdź wszystkie obszary na obrazie, które mają kolor zbliżony do wartości szesnastkowej "${sourceColorHex}". Zastąp ten kolor nowym kolorem o wartości szesnastkowej "${targetColorHex}". Zrób to w sposób inteligentny: zachowaj oryginalną teksturę, cienie i oświetlenie. Nie zmieniaj żadnych innych kolorów na zdjęciu. Zwróć tylko i wyłącznie obraz wynikowy.` };
 
     const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image-preview',
+        model: 'gemini-2.5-flash-image',
         contents: { parts: [imagePart, textPart] },
         config: {
-            responseModalities: [Modality.IMAGE, Modality.TEXT],
+            responseModalities: [Modality.IMAGE],
         },
     });
 
@@ -452,6 +452,78 @@ export const getColorsFromImages = async (images: { name: string; blob: Blob }[]
   const jsonResponse = parseJsonResponse(response.text);
 
   return jsonResponse.colors || [];
+};
+
+export const updateDescriptionColor = async (
+  descriptionParts: string[],
+  newColors: string[]
+): Promise<string[]> => {
+  if (newColors.length === 0 || descriptionParts.length < 3) {
+    return descriptionParts;
+  }
+  
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const colorsString = newColors.join(', ');
+  
+  // Give the AI the full context for a more reliable edit.
+  const fullDescription = descriptionParts.map((part, index) => `Akapit ${index + 1}:\n${part}`).join('\n\n');
+
+  const prompt = `Jesteś precyzyjnym edytorem tekstu. Twoim zadaniem jest zaktualizowanie opisu produktu, aby odzwierciedlał nowe dostępne kolory.
+
+Nowe dostępne kolory to: "${colorsString}".
+
+Oto pełny, oryginalny opis produktu podzielony na akapity:
+---
+${fullDescription}
+---
+
+Twoje zadanie:
+1. Przeczytaj cały opis, aby zrozumieć kontekst.
+2. Zidentyfikuj akapit, który mówi o kolorach i personalizacji (zazwyczaj jest to akapit 3).
+3. Zredaguj **TYLKO I WYŁĄCZNIE TEN JEDEN AKAPIT**, płynnie wplatając w niego informację o nowych, dostępnych kolorach. Zachowaj oryginalny ton i styl.
+4. Pozostałe akapity pozostaw **BEZ ŻADNYCH ZMIAN**.
+
+Zwróć odpowiedź jako obiekt JSON, który zawiera **CAŁY** zaktualizowany opis w formie tablicy 4 stringów. Musisz zwrócić wszystkie 4 akapity.
+
+Przykład jak zaktualizować akapit:
+- Stary: "Domyślnie wysyłamy kolor czarny..."
+- Nowy: "Produkt jest teraz dostępny w kolorze ${colorsString.toLowerCase()}." lub "Wybierz swój ulubiony kolor: ${colorsString.toLowerCase()}."`;
+
+  const responseSchema = {
+    type: Type.OBJECT,
+    properties: {
+      updated_description_parts: {
+        type: Type.ARRAY,
+        description: 'Tablica zawierająca DOKŁADNIE 4 akapity zaktualizowanego opisu produktu.',
+        items: { type: Type.STRING },
+      },
+    },
+    propertyOrdering: ["updated_description_parts"],
+  };
+
+  const response = await ai.models.generateContent({
+    model: 'gemini-2.5-flash',
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: responseSchema,
+    }
+  });
+  
+  try {
+    const jsonResponse = parseJsonResponse(response.text);
+    const newParts = jsonResponse.updated_description_parts;
+
+    if (Array.isArray(newParts) && newParts.length === 4) {
+      return newParts;
+    }
+  } catch (e) {
+    console.error("Failed to parse JSON response for description update", e);
+  }
+  
+  // Fallback: If JSON parsing fails or the array is invalid, return the original description.
+  console.warn("AI did not return a valid JSON object with 4 description parts. Reverting to original description.");
+  return descriptionParts;
 };
 
 

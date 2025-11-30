@@ -5,8 +5,8 @@ import { ThreeMFLoader } from 'three/addons/loaders/3MFLoader.js';
 // Let TypeScript know about the JSZip global variable from the script tag in index.html
 declare const JSZip: any;
 
-const RENDER_WIDTH = 1024;
-const RENDER_HEIGHT = 1024;
+const RENDER_WIDTH = 2048;
+const RENDER_HEIGHT = 2048;
 
 interface ModelDimensions {
     x: number;
@@ -281,11 +281,13 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     const geometriesToDispose: THREE.BufferGeometry[] = [];
     const materialsToDispose: THREE.Material[] = [];
     
-    // A high-quality default material for monochrome models (STL).
+    // --- Material for STL (Professional Studio Look) ---
+    // Pure white for clean look, smoother roughness for premium plastic feel (0.4 vs 0.55).
+    // Metalness at 0.1 gives better highlights without looking like metal.
     const stlMaterial = new THREE.MeshStandardMaterial({
-        color: 0xcccccc, 
-        metalness: 0.2,
-        roughness: 0.5,
+        color: 0xffffff, 
+        metalness: 0.1,
+        roughness: 0.4,
     });
     materialsToDispose.push(stlMaterial);
     
@@ -296,8 +298,14 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         const loader = new ThreeMFLoader();
         objectToFrame = loader.parse(fileBuffer);
 
-        // Get dimensions from the fully loaded Three.js object, which is more robust.
-        // This correctly handles assemblies and complex files parsed by the loader.
+        // ROTATION FIX FOR 3MF:
+        // Most 3D printing files (3MF) are Z-up. Three.js is Y-up.
+        // To make the object sit on the "floor" naturally instead of standing on its edge or back,
+        // we rotate it -90 degrees around X.
+        objectToFrame.rotation.x = -Math.PI / 2;
+        objectToFrame.updateMatrixWorld(true);
+
+        // Get dimensions from the rotated object
         const box = new THREE.Box3().setFromObject(objectToFrame);
         if (box.isEmpty()) {
             throw new Error("Could not compute a bounding box for the 3MF model. The file might not contain any visible geometry.");
@@ -306,11 +314,8 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         box.getSize(size);
         dimensions = { x: size.x, y: size.y, z: size.z };
 
-        // Attempt to get weight from metadata. This is a non-critical enhancement.
-        // Our modified getMetricsFrom3mf will not throw if it can't find vertices,
-        // but we'll wrap it in a try/catch for other potential parsing errors.
+        // Attempt to get weight from metadata.
         try {
-            // This custom parser is now only used as a secondary source for weight.
             const metrics = await getMetricsFrom3mf(modelFile);
             weight = metrics.weight;
         } catch (e) {
@@ -318,10 +323,6 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
             weight = null;
         }
 
-        // CRITICAL FIX: Do NOT override materials for 3MF files.
-        // The 3MFLoader is smart enough to create its own materials based on the file content
-        // (including vertex colors, base colors, etc.). Overriding them destroys color information.
-        // We only traverse to collect geometries and materials for later disposal.
         objectToFrame.traverse((child) => {
             if (child instanceof THREE.Mesh) {
                 geometriesToDispose.push(child.geometry);
@@ -335,11 +336,22 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     } else { // Handle .stl
         const loader = new STLLoader();
         const geometry = loader.parse(fileBuffer) as THREE.BufferGeometry;
-        geometriesToDispose.push(geometry);
-        geometry.computeVertexNormals();
         
-        // Calculate dimensions and weight directly from the geometry data. This is robust.
+        // ROTATION FIX FOR STL:
+        // Rotate -90 degrees around X axis to convert Z-up (CAD/Slicer standard) to Y-up (WebGL standard).
+        // This ensures the "bottom" of the print sits on the "floor" of the scene.
+        geometry.rotateX(-Math.PI / 2);
+        
+        // Recalculate normals after rotation for correct lighting
+        geometry.computeVertexNormals();
+        geometry.computeBoundingBox(); // Update bounding box to match new orientation
+        
+        geometriesToDispose.push(geometry);
+        
+        // Dimensions now reflect the visual width (X), height (Y), and depth (Z) in the scene
         dimensions = getDimensionsFromGeometry(geometry);
+        
+        // Volume calculation is invariant to rotation, so we can use geometry as is
         const volume = getVolumeFromGeometry(geometry); // volume in mm^3
         const weightInGrams = volume * PLA_DENSITY_G_PER_MM3;
         weight = weightInGrams / 1000; // Convert to KG
@@ -347,68 +359,145 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         objectToFrame = new THREE.Mesh(geometry, stlMaterial);
     }
     
-    // --- Reorient dimensions for sales context ---
-    // The "height" should always be the largest dimension, regardless of model orientation in the file.
-    const sortedDims = [dimensions.x, dimensions.y, dimensions.z].sort((a, b) => b - a);
-    dimensions = {
-        x: sortedDims[1], // width (middle value)
-        y: sortedDims[0], // height (largest value)
-        z: sortedDims[2], // depth (smallest value)
-    };
-    
-    if (!objectToFrame) {
-        throw new Error('Model file could not be parsed or loaded by Three.js.');
+    // Check if dimensions are valid
+    if (!dimensions || (dimensions.x === 0 && dimensions.y === 0 && dimensions.z === 0)) {
+         throw new Error('Calculated dimensions are zero. The model might be empty.');
     }
 
-    // --- Step 2: Setup Scene and Renderer for taking pictures ---
+    // --- Step 2: Setup Scene with Professional Studio Lighting ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0xffffff); // White background for a clean, professional look
-    const camera = new THREE.PerspectiveCamera(50, RENDER_WIDTH / RENDER_HEIGHT, 0.1, 1000);
-    camera.position.set(0, 0, 100);
+    scene.background = new THREE.Color(0xffffff); // Pure white background
 
-    // New, improved studio lighting setup
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x999999, 1.5));
-    const dirLight1 = new THREE.DirectionalLight(0xffffff, 2.0); // Stronger key light
-    dirLight1.position.set(1, 1, 1);
-    scene.add(dirLight1);
-    const dirLight2 = new THREE.DirectionalLight(0xffffff, 0.75); // Softer fill light
-    dirLight2.position.set(-1, -1, -0.5);
-    scene.add(dirLight2);
+    // 1. Hemisphere Light (Simulates studio environment bounce)
+    const hemiLight = new THREE.HemisphereLight(0xffffff, 0xe0e0e0, 0.8);
+    scene.add(hemiLight);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    // 2. Key Light (Main softbox source) - Increased intensity
+    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    mainLight.castShadow = true;
+    mainLight.shadow.mapSize.width = 4096;
+    mainLight.shadow.mapSize.height = 4096;
+    mainLight.shadow.bias = -0.0001;
+    mainLight.shadow.radius = 4;
+    mainLight.shadow.blurSamples = 20;
+    scene.add(mainLight);
+
+    // 3. Fill Light (Softens shadows)
+    const fillLight = new THREE.DirectionalLight(0xebf4fa, 0.6);
+    scene.add(fillLight);
+
+    // 4. Rim Light (Backlight - separates object from background)
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.9);
+    scene.add(rimLight);
+
+    // Renderer Setup for Photorealism
+    const renderer = new THREE.WebGLRenderer({ 
+        antialias: true, 
+        alpha: true, 
+        preserveDrawingBuffer: true,
+        powerPreference: "high-performance"
+    });
     renderer.setSize(RENDER_WIDTH, RENDER_HEIGHT);
     renderer.setPixelRatio(window.devicePixelRatio);
+    
+    // Tone Mapping
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1; // Slightly brighter exposure
+    
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     
     scene.add(objectToFrame);
 
     try {
-        // --- Step 3: Center Object for consistent camera angles ---
+        // --- Step 3: Center Object & Setup Ground ---
         const box = new THREE.Box3().setFromObject(objectToFrame);
+        const size = new THREE.Vector3();
+        box.getSize(size);
         const center = box.getCenter(new THREE.Vector3());
-        objectToFrame.position.sub(center);
+        const maxDim = Math.max(size.x, size.y, size.z);
 
-        // --- Step 4: Frame Camera based on pre-calculated, accurate dimensions ---
-        const size = new THREE.Vector3(dimensions.x, dimensions.y, dimensions.z);
-        const maxSize = Math.max(size.x, size.y, size.z);
-        const fitHeightDistance = maxSize / (2 * Math.atan(Math.PI * camera.fov / 360));
+        objectToFrame.position.sub(center); // Center at 0,0,0
+
+        // Enable shadows on all meshes and improve material appearance
+        objectToFrame.traverse((child) => {
+            if (child instanceof THREE.Mesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
+                child.material.side = THREE.DoubleSide;
+                
+                // Upgrade default materials if needed
+                if (child.material !== stlMaterial && (child.material instanceof THREE.MeshPhongMaterial || child.material instanceof THREE.MeshLambertMaterial)) {
+                     const oldMat = child.material as THREE.MeshPhongMaterial;
+                     const newMat = new THREE.MeshStandardMaterial({
+                        color: oldMat.color,
+                        map: oldMat.map,
+                        roughness: 0.5,
+                        metalness: 0.1
+                     });
+                     child.material = newMat;
+                     materialsToDispose.push(newMat);
+                }
+            }
+        });
+
+        // Ground Plane (Shadow Catcher)
+        const planeGeometry = new THREE.PlaneGeometry(maxDim * 20, maxDim * 20);
+        planeGeometry.rotateX(-Math.PI / 2);
+        const planeMaterial = new THREE.ShadowMaterial({ opacity: 0.08, color: 0x000000 });
+        const plane = new THREE.Mesh(planeGeometry, planeMaterial);
+        // Position floor exactly at the bottom of the object bounding box
+        plane.position.y = -size.y / 2 - (maxDim * 0.001); 
+        plane.receiveShadow = true;
+        scene.add(plane);
+
+        // Position Lights relative to object size
+        mainLight.position.set(size.x, size.y * 2, size.z * 2);
+        fillLight.position.set(-size.x * 2, size.y * 0.5, size.z);
+        rimLight.position.set(0, size.y * 2, -size.z * 2);
+
+        // Adjust Shadow Camera Frustum
+        const d = maxDim * 2;
+        mainLight.shadow.camera.left = -d;
+        mainLight.shadow.camera.right = d;
+        mainLight.shadow.camera.top = d;
+        mainLight.shadow.camera.bottom = -d;
+        mainLight.shadow.camera.updateProjectionMatrix();
+
+        // --- Step 4: Frame Camera (Portrait Lens look) ---
+        const camera = new THREE.PerspectiveCamera(45, RENDER_WIDTH / RENDER_HEIGHT, 0.1, maxDim * 100);
+        
+        // Calculate distance to fit object
+        const fitHeightDistance = maxDim / (2 * Math.atan(Math.PI * camera.fov / 360));
         const fitWidthDistance = fitHeightDistance / camera.aspect;
-        const distance = 1.3 * Math.max(fitHeightDistance, fitWidthDistance);
-        camera.near = distance / 100;
-        camera.far = distance * 100;
-        camera.updateProjectionMatrix();
+        const distance = 1.6 * Math.max(fitHeightDistance, fitWidthDistance); // 1.6x for composition
 
-        // --- Step 5: Define Camera Angles & Render ---
+        // --- Step 5: Define Camera Angles (Hero Shots) ---
+        // Using angles that guarantee showing the front/side/iso views regardless of initial rotation quirks,
+        // but assuming the Y-up correction fixed the main orientation.
+        // Elevation is set to 20% of height for a "Tabletop" look.
+        const elevation = size.y * 0.2;
+        
         const cameraPositions = [
-            { name: 'render_front.png', position: new THREE.Vector3(0, 0, distance) },
-            { name: 'render_top.png', position: new THREE.Vector3(0, distance, 0) },
-            { name: 'render_angle.png', position: new THREE.Vector3(distance * 0.7, distance * 0.5, distance * 0.7) },
+            // 1. HERO FRONT: Direct front view, slightly elevated. Best for main thumbnail.
+            { name: '1_front.png', position: new THREE.Vector3(0, elevation, distance) },
+            
+            // 2. HERO ISO RIGHT: Standard product photography angle (3/4 view).
+            { name: '2_iso_right.png', position: new THREE.Vector3(distance * 0.7, elevation * 1.5, distance * 0.7) },
+            
+            // 3. HERO ISO LEFT: The other side.
+            { name: '3_iso_left.png', position: new THREE.Vector3(-distance * 0.7, elevation * 1.5, distance * 0.7) },
+            
+            // 4. SIDE PROFILE: Pure side view to show depth/profile.
+            { name: '4_side.png', position: new THREE.Vector3(distance, elevation, 0) },
         ];
+        
         const imageFiles: File[] = [];
 
         for (const view of cameraPositions) {
             camera.position.copy(view.position);
-            camera.lookAt(scene.position);
+            camera.lookAt(0, 0, 0); 
             renderer.render(scene, camera);
             const blob = await new Promise<Blob | null>(res => renderer.domElement.toBlob(res, 'image/png'));
             if (blob) imageFiles.push(new File([blob], view.name, { type: 'image/png' }));
@@ -422,7 +511,7 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
 
     } catch (error) {
         console.error('Error during model rendering:', error);
-        throw error; // Re-throw to be caught by the main UI
+        throw error;
     } finally {
         // --- Step 6: Cleanup ---
         renderer.dispose();

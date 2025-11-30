@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   getBaseLinkerInventories,
@@ -36,7 +37,8 @@ const platformConfig = {
   }
 };
 
-const FormField = ({ id, label, value, onChange, disabled, children }: { id: string, label: string, value: string, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void, disabled: boolean, children: React.ReactNode }) => (
+// Fix: Made `children` prop optional to resolve a potential TypeScript error where it's incorrectly reported as missing.
+const FormField = ({ id, label, value, onChange, disabled, children }: { id: string, label: string, value: string, onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void, disabled: boolean, children?: React.ReactNode }) => (
     <div>
         <label htmlFor={id} className="block text-sm font-medium text-gray-300">{label}</label>
         <select
@@ -66,7 +68,7 @@ const BaseLinkerForm: React.FC<{ onExport: (credentials: any) => void; status: E
   const [manufacturers, setManufacturers] = useState<Manufacturer[]>([]);
   const [selectedManufacturer, setSelectedManufacturer] = useState('');
   const [price, setPrice] = useState('');
-  const [quantity, setQuantity] = useState('1');
+  const [quantity, setQuantity] = useState('10');
   
   const [loading, setLoading] = useState<'idle' | 'loading' | 'error'>('idle');
   const [formError, setFormError] = useState<string | null>(null);

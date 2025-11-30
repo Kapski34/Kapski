@@ -7,21 +7,26 @@ interface DescriptionOutputProps {
   descriptionParts: string[];
   sku: string;
   ean: string;
+  onEanChange: (newEan: string) => void;
   colors: string[];
   condition: string;
   dimensions: ModelDimensions | null;
   weight: number | null;
   onDimensionsChange: (axis: keyof ModelDimensions, valueInCm: number) => void;
+  onWeightChange: (weightInKg: number) => void;
+  includeHiveId: boolean;
+  onIncludeHiveIdChange: (checked: boolean) => void;
 }
 
 const descriptionLabels = ["Opis", "Opis dodatkowy 1", "Opis dodatkowy 2", "Opis dodatkowy 3"];
 
-export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTitle, descriptionParts, sku, ean, colors, condition, dimensions, weight, onDimensionsChange }) => {
+export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTitle, descriptionParts, sku, ean, onEanChange, colors, condition, dimensions, weight, onDimensionsChange, onWeightChange, includeHiveId, onIncludeHiveIdChange }) => {
   const hasContent = auctionTitle || descriptionParts.length > 0;
 
   const [widthCm, setWidthCm] = useState('');
   const [heightCm, setHeightCm] = useState('');
   const [depthCm, setDepthCm] = useState('');
+  const [localWeightKg, setLocalWeightKg] = useState('');
 
   useEffect(() => {
     if (dimensions) {
@@ -34,6 +39,10 @@ export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTit
         setDepthCm('');
     }
   }, [dimensions]);
+  
+  useEffect(() => {
+    setLocalWeightKg(weight !== null ? weight.toFixed(3) : '');
+  }, [weight]);
 
   const handleDimensionBlur = (axis: keyof ModelDimensions, value: string) => {
     const numericValue = parseFloat(value);
@@ -48,12 +57,22 @@ export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTit
       }
     }
   };
+  
+  const handleWeightBlur = (value: string) => {
+    const numericValue = parseFloat(value);
+    if (!isNaN(numericValue) && numericValue >= 0) {
+        onWeightChange(numericValue);
+    } else {
+        // Revert if invalid input
+        setLocalWeightKg(weight !== null ? weight.toFixed(3) : '');
+    }
+  };
+
 
   if (!hasContent) {
     return null;
   }
     
-  const formattedWeightKg = weight !== null ? weight.toFixed(3) : '';
   const formattedCondition = condition === 'new' ? 'Nowy' : (condition === 'used' ? 'Używany' : 'Odnowiony');
 
   return (
@@ -85,13 +104,17 @@ export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTit
           height="h-20"
         />
 
-        {ean !== undefined && (
-            <CopyableOutput
-                label="EAN"
-                content={ean}
-                height="h-20"
-            />
-        )}
+        <div>
+          <label htmlFor="ean-input" className="block text-md font-semibold text-gray-300 mb-2">EAN (GTIN)</label>
+          <input
+            id="ean-input"
+            type="text"
+            value={ean}
+            onChange={(e) => onEanChange(e.target.value)}
+            placeholder="Wprowadź oficjalny kod EAN"
+            className="w-full p-3 bg-slate-900/70 border border-gray-700 rounded-lg text-gray-300 font-mono text-sm focus:ring-2 focus:ring-cyan-400 focus:outline-none"
+          />
+        </div>
 
         {colors.length > 0 && (
             <CopyableOutput
@@ -143,22 +166,56 @@ export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTit
           </>
         )}
 
-        <CopyableOutput
-            label="Szacowana waga (kg)"
-            content={formattedWeightKg}
-            height="h-20"
-        />
+         <div>
+          <label htmlFor="weight-input" className="block text-md font-semibold text-gray-300 mb-2">Szacowana waga (kg)</label>
+          <input
+            id="weight-input"
+            type="number"
+            step="0.001"
+            value={localWeightKg}
+            onChange={(e) => setLocalWeightKg(e.target.value)}
+            onBlur={() => handleWeightBlur(localWeightKg)}
+            className="w-full p-3 bg-slate-900/70 border border-gray-700 rounded-lg text-gray-300 font-mono text-sm focus:ring-2 focus:ring-cyan-400 focus:outline-none"
+          />
+        </div>
       </div>
 
 
-      {descriptionParts.map((part, index) => (
-          <CopyableOutput
-              key={index}
-              label={descriptionLabels[index] || `Paragraf ${index + 1}`}
-              content={part}
-              height="h-32"
-          />
-      ))}
+      {descriptionParts.map((part, index) => {
+          let action: React.ReactNode | null = null;
+          let finalContent = part;
+
+          if (index === 3) { // "Opis dodatkowy 3"
+              action = (
+                  <div className="flex items-center gap-2 text-sm text-gray-400">
+                      <input
+                          type="checkbox"
+                          id="hive-id-checkbox"
+                          checked={includeHiveId}
+                          onChange={(e) => onIncludeHiveIdChange(e.target.checked)}
+                          className="h-4 w-4 rounded bg-gray-800 border-gray-600 text-cyan-600 focus:ring-cyan-500 cursor-pointer"
+                      />
+                      <label htmlFor="hive-id-checkbox" className="cursor-pointer select-none">
+                          Dołącz Hive ID
+                      </label>
+                  </div>
+              );
+
+              if (includeHiveId) {
+                  finalContent = `${part}\n\nHive ID: R256CX12EK`;
+              }
+          }
+
+          return (
+              <CopyableOutput
+                  key={index}
+                  label={descriptionLabels[index] || `Paragraf ${index + 1}`}
+                  content={finalContent}
+                  height="h-32"
+                  action={action}
+              />
+          );
+      })}
     </div>
   );
 };
