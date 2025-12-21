@@ -85,7 +85,6 @@ export const App: React.FC = () => {
     otherCostsPercentage: 15,
   });
   const [printCost, setPrintCost] = useState<PrintCost | null>(null);
-  const [includeHiveId, setIncludeHiveId] = useState<boolean>(false);
   
   useEffect(() => {
     try {
@@ -162,7 +161,6 @@ export const App: React.FC = () => {
       setCostAnalysisError(null);
       setPrintCost(null);
       setAdditionalInfo('');
-      setIncludeHiveId(false);
   }
 
   const handleImageFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -516,9 +514,6 @@ export const App: React.FC = () => {
 
         // 4. Add description file to the root
         const finalDescriptionParts = [...descriptionParts];
-        if (includeHiveId && finalDescriptionParts.length > 3 && finalDescriptionParts[3]) {
-            finalDescriptionParts[3] = `${finalDescriptionParts[3]}\n\nHive ID: R256CX12EK`;
-        }
         
         let descriptionContent = `TYTUŁ AUKCJI:\n${auctionTitle}\n\n`;
         if (sku) descriptionContent += `SKU: ${sku}\n`;
@@ -572,9 +567,6 @@ export const App: React.FC = () => {
     setExportError(null);
     
     const finalDescriptionParts = [...descriptionParts];
-    if (includeHiveId && finalDescriptionParts.length > 3 && finalDescriptionParts[3]) {
-        finalDescriptionParts[3] = `${finalDescriptionParts[3]}\n\nHive ID: R256CX12EK`;
-    }
 
     const productData = {
         title: auctionTitle,
@@ -714,8 +706,6 @@ export const App: React.FC = () => {
                 onDimensionsChange={handleDimensionsChange} 
                 weight={weight}
                 onWeightChange={handleWeightChange}
-                includeHiveId={includeHiveId}
-                onIncludeHiveIdChange={setIncludeHiveId}
               />
               {selectedImages.length > 0 && <SelectedImagesPreview images={selectedImages} onImageUpdate={handleImageUpdate} onColorChange={handleColorUpdate} />}
               

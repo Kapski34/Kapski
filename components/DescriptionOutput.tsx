@@ -14,13 +14,11 @@ interface DescriptionOutputProps {
   weight: number | null;
   onDimensionsChange: (axis: keyof ModelDimensions, valueInCm: number) => void;
   onWeightChange: (weightInKg: number) => void;
-  includeHiveId: boolean;
-  onIncludeHiveIdChange: (checked: boolean) => void;
 }
 
 const descriptionLabels = ["Opis", "Opis dodatkowy 1", "Opis dodatkowy 2", "Opis dodatkowy 3"];
 
-export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTitle, descriptionParts, sku, ean, onEanChange, colors, condition, dimensions, weight, onDimensionsChange, onWeightChange, includeHiveId, onIncludeHiveIdChange }) => {
+export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTitle, descriptionParts, sku, ean, onEanChange, colors, condition, dimensions, weight, onDimensionsChange, onWeightChange }) => {
   const hasContent = auctionTitle || descriptionParts.length > 0;
 
   const [widthCm, setWidthCm] = useState('');
@@ -182,37 +180,12 @@ export const DescriptionOutput: React.FC<DescriptionOutputProps> = ({ auctionTit
 
 
       {descriptionParts.map((part, index) => {
-          let action: React.ReactNode | null = null;
-          let finalContent = part;
-
-          if (index === 3) { // "Opis dodatkowy 3"
-              action = (
-                  <div className="flex items-center gap-2 text-sm text-gray-400">
-                      <input
-                          type="checkbox"
-                          id="hive-id-checkbox"
-                          checked={includeHiveId}
-                          onChange={(e) => onIncludeHiveIdChange(e.target.checked)}
-                          className="h-4 w-4 rounded bg-gray-800 border-gray-600 text-cyan-600 focus:ring-cyan-500 cursor-pointer"
-                      />
-                      <label htmlFor="hive-id-checkbox" className="cursor-pointer select-none">
-                          Dołącz Hive ID
-                      </label>
-                  </div>
-              );
-
-              if (includeHiveId) {
-                  finalContent = `${part}\n\nHive ID: R256CX12EK`;
-              }
-          }
-
           return (
               <CopyableOutput
                   key={index}
                   label={descriptionLabels[index] || `Paragraf ${index + 1}`}
-                  content={finalContent}
+                  content={part}
                   height="h-32"
-                  action={action}
               />
           );
       })}
