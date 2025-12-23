@@ -608,10 +608,10 @@ export const App: React.FC = () => {
   }
 
   return (
-    <div className="min-h-screen bg-slate-900 text-gray-200 flex flex-col items-center p-4 sm:p-6 lg:p-8">
+    <div className="min-h-screen bg-slate-950 text-gray-100 flex flex-col items-center p-4 sm:p-6 lg:p-8">
       <div className="w-full max-w-5xl">
         <Header />
-        <main className="relative mt-8 bg-slate-800/50 rounded-2xl shadow-2xl shadow-cyan-500/10 p-6 sm:p-8 backdrop-blur-sm border border-cyan-500/20">
+        <main className="relative mt-8 bg-slate-900 rounded-2xl shadow-2xl shadow-slate-900/20 p-6 sm:p-8 border border-slate-800 text-gray-200">
           
           <div className="absolute top-4 right-4">
              <button
