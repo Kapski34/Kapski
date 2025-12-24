@@ -60,6 +60,9 @@ export const App: React.FC = () => {
   const [loadingMessage, setLoadingMessage] = useState<string>('Przygotowywanie...');
   const [isPackaging, setIsPackaging] = useState<boolean>(false);
   
+  // Przechowujemy obraz bazowy dla AI, aby móc go użyć przy regeneracji pojedynczych slotów
+  const [baseImageForAi, setBaseImageForAi] = useState<Blob | null>(null);
+
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [exportPlatform, setExportPlatform] = useState<ExportPlatform | null>(null);
   const [exportStatus, setExportStatus] = useState<ExportStatus>('idle');
@@ -110,6 +113,7 @@ export const App: React.FC = () => {
       setDimensions(null);
       setWeight(null);
       setSelectedImages([]);
+      setBaseImageForAi(null);
       setError(null);
       setCostAnalysisStatus('idle');
       setCostAnalysisResult(null);
@@ -169,9 +173,8 @@ export const App: React.FC = () => {
       setLoadingMessage('Stylizacja zdjęć przez AI...');
       let finalGallery: { name: string; blob: Blob }[] = [];
 
-      // KLUCZOWA ZMIANA: Wybór bazy dla AI
-      // Jeśli użytkownik wgrał zdjęcie (np. z butelką), używamy go jako wzorca dla AI, aby zachować kompozycję.
       const baseForAi = userImages.length > 0 ? userImages[0].blob : (modelRenders.length > 0 ? modelRenders[0].blob : null);
+      setBaseImageForAi(baseForAi);
 
       if (baseForAi) {
           const aiGensPromise = imageStylePrompt.trim() 
@@ -198,6 +201,35 @@ export const App: React.FC = () => {
       setError(err instanceof Error ? err.message : 'Wystąpił błąd.');
     } finally { setIsLoading(false); }
   }, [modelFile, imageFiles, costSettings, additionalInfo, imageStylePrompt]);
+
+  const handleRegenerateImage = async (index: number) => {
+      if (!baseImageForAi || !auctionTitle) return;
+      
+      // Slot 0 to zazwyczaj zdjęcie na białym tle, sloty 1-3 to wariacje AI
+      // Jeśli regenerujemy slot 1-3, używamy generateAdditionalImages z odpowiednim offsetem
+      try {
+          let newImage: { name: string; blob: Blob } | null = null;
+          
+          if (index === 0) {
+              const newBlob = await addWhiteBackground(baseImageForAi);
+              newImage = { name: 'main_product_refreshed.png', blob: newBlob };
+          } else {
+              // Prosimy o 1 nową wariację, używając indeksu jako ziarna dla typu ujęcia
+              const results = await generateAdditionalImages(baseImageForAi, auctionTitle, 1, imageStylePrompt, index);
+              if (results.length > 0) newImage = results[0];
+          }
+
+          if (newImage) {
+              setSelectedImages(prev => {
+                  const updated = [...prev];
+                  updated[index] = newImage!;
+                  return updated;
+              });
+          }
+      } catch (err) {
+          console.error("Błąd regeneracji:", err);
+      }
+  };
 
   const handleExport = async (credentials: any) => {
     setExportStatus('exporting');
@@ -290,7 +322,12 @@ export const App: React.FC = () => {
           {selectedImages.length > 0 && !isLoading && (
             <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
               <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => d ? {...d, [a]: v*10} : null)} weight={weight} onWeightChange={setWeight} />
-              <SelectedImagesPreview images={selectedImages} onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} onColorChange={async () => {}} />
+              <SelectedImagesPreview 
+                images={selectedImages} 
+                onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} 
+                onColorChange={async () => {}} 
+                onRegenerate={handleRegenerateImage}
+              />
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
                 {printCost && <PrintCostEstimator cost={printCost} />}
                 <CostAnalysis status={costAnalysisStatus} result={costAnalysisResult} error={costAnalysisError} onAnalyze={handleAnalyzeCost} />

@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 
 interface ImagePreviewProps {
@@ -23,7 +24,6 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ imageFile }) => {
     return () => {
       isMounted = false;
       if (imageUrl) {
-        // Clean up the object URL to prevent memory leaks
         URL.revokeObjectURL(imageUrl);
       }
     };
@@ -31,10 +31,10 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ imageFile }) => {
   
   const renderContent = () => {
     if (imageUrl) {
-        return <img src={imageUrl} alt="Podgląd produktu" className="w-full h-full object-cover" />;
+        // Zmieniono na object-contain, aby nie oszukiwać wzroku użytkownika kadrowaniem w UI
+        return <img src={imageUrl} alt="Podgląd produktu" className="w-full h-full object-contain p-2" />;
     }
     
-    // Handle non-image files like ZIP or 3D models
     if (imageFile) {
         const isZip = imageFile.name.toLowerCase().endsWith('.zip') || imageFile.type.includes('zip');
         const is3dModel = imageFile.name.toLowerCase().endsWith('.stl') || imageFile.name.toLowerCase().endsWith('.3mf');
@@ -67,7 +67,6 @@ export const ImagePreview: React.FC<ImagePreviewProps> = ({ imageFile }) => {
         );
     }
 
-    // Default placeholder
     return (
       <div className="text-center text-gray-500">
         <svg xmlns="http://www.w3.org/2000/svg" className="h-16 w-16 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1}>
