@@ -1,5 +1,7 @@
+
 import React, { useState, useEffect } from 'react';
-import { addWhiteBackground, changeImageColor, getColorsFromImages } from '../services/geminiService';
+// Fix: Removed non-existent import getColorsFromImages.
+import { addWhiteBackground, changeImageColor } from '../services/geminiService';
 
 interface SelectedImagesPreviewProps {
   images: { name: string; blob: Blob }[];
