@@ -1,5 +1,6 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
+import { BackgroundIntensity } from "../App";
 
 const parseJsonResponse = (responseText: string) => {
   const jsonStartIndex = responseText.indexOf('{');
@@ -19,7 +20,6 @@ const fileToGenerativePart = async (file: Blob): Promise<{ inlineData: { data: s
   return { inlineData: { data: base64EncodedData, mimeType: file.type || 'image/png' } };
 };
 
-// Pomocnicza funkcja do wykrywania proporcji obrazu
 const detectAspectRatio = (blob: Blob): Promise<"1:1" | "3:4" | "4:3" | "9:16" | "16:9"> => {
   return new Promise((resolve) => {
     const img = new Image();
@@ -83,7 +83,7 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
   
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
-    contents: { parts: [imagePart, { text: "FULL FRAME PRESERVATION: Subject isolated on perfect white background (#FFFFFF). Keep original framing and edges. Do not crop. High contrast, sharp edges. No text." }] },
+    contents: { parts: [imagePart, { text: "FULL FRAME PRESERVATION: Subject isolated on perfect white background (#FFFFFF). Keep original framing and edges. Do not crop. High contrast, sharp edges. No text, no extra objects." }] },
     config: { imageConfig: { aspectRatio: ratio } }
   });
   const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
@@ -93,36 +93,65 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
 };
 
 const VARIATION_SHOTS = [
-  { type: "HERO SHOT", desc: "Eye-level perspective. Showcase the whole product clearly.", theme: "Soft natural morning light with gentle shadows." },
-  { type: "CLOSE-UP DETAIL", desc: "Macro-style, zoomed in on texture.", theme: "High contrast lighting." },
-  { type: "THREE-QUARTER VIEW", desc: "Slightly high angle.", theme: "Golden hour warm glow." },
-  { type: "LOW ANGLE ACTION SHOT", desc: "Low-angle heroic perspective.", theme: "Modern architectural interior background." }
+  { type: "HERO SHOT", desc: "Eye-level perspective. Showcase the whole product clearly." },
+  { type: "DETAIL SHOT", desc: "Macro-style, focus on texture and quality." },
+  { type: "3/4 ANGLE", desc: "Slightly high angle showing depth." },
+  { type: "DRAMATIC VIEW", desc: "Dynamic angle with unique lighting." }
 ];
+
+const INTENSITY_CONFIG = {
+  calm: {
+    baseTheme: "Clean professional studio setting with neutral minimal background.",
+    lighting: "Soft, uniform morning light, very gentle shadows.",
+    vibe: "Clean, corporate, technical, minimalist."
+  },
+  normal: {
+    baseTheme: "Modern living room or office interior context.",
+    lighting: "Natural daylight with realistic reflections.",
+    vibe: "Professional, cozy, lifestyle photography."
+  },
+  crazy: {
+    baseTheme: "Epic cinematic environment like futuristic lab, mystical neon forest, or outer space nebula.",
+    lighting: "Dramatic rim lighting, vibrant neon colors, volumetric fog, high contrast.",
+    vibe: "Surreal, imaginative, artistic, high-energy."
+  }
+};
 
 export const generateAdditionalImages = async (
   mainImageBlob: Blob,
   auctionTitle: string,
   count: number,
-  stylePrompt: string = "Professional studio setting",
-  startIndex: number = 0
+  userStylePrompt: string = "",
+  startIndex: number = 0,
+  intensity: BackgroundIntensity = 'normal'
 ): Promise<{ name: string; blob: Blob }[]> => {
     if (!process.env.API_KEY || count <= 0) return [];
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const imagePart = await fileToGenerativePart(mainImageBlob);
     const ratio = await detectAspectRatio(mainImageBlob);
+    const config = INTENSITY_CONFIG[intensity];
 
     const tasks = Array.from({ length: count }).map(async (_, i) => {
         const shotIndex = (startIndex + i) % VARIATION_SHOTS.length;
         const shot = VARIATION_SHOTS[shotIndex];
+        
         const fullPrompt = `
           OBJECTIVE: Generate a ${shot.type} for the product: ${auctionTitle}.
-          VISUAL RULES:
-          1. FULL FRAME PRESERVATION: Use the original image's framing. Do not crop out edges or cut off any parts of the scene.
-          2. PERSPECTIVE: ${shot.desc}
-          3. CONSISTENCY: Maintain the identity of the product and all accessories exactly as in the reference.
-          4. ENVIRONMENT: Transform background to: ${stylePrompt}.
-          5. STYLE: ${shot.theme}
-          8k resolution, photorealistic.
+          
+          STRICT PRODUCT INTEGRITY RULES:
+          1. DO NOT add any text, labels, nameplates, or stickers to the product.
+          2. DO NOT change the product's geometry, shape, or surface details.
+          3. DO NOT cut off any parts of the product. Keep original framing boundaries.
+          4. The product MUST look exactly like a real 3D printed object from the reference.
+          
+          ENVIRONMENT (BACKGROUND) RULES:
+          1. TRANSFORM ONLY THE BACKGROUND AND LIGHTING.
+          2. THEME: ${userStylePrompt || config.baseTheme}
+          3. LIGHTING: ${config.lighting}
+          4. PERSPECTIVE: ${shot.desc}
+          5. VIBE: ${config.vibe}
+          
+          Technical: 8k photorealistic, professional e-commerce quality.
         `.trim();
 
         try {
@@ -135,7 +164,7 @@ export const generateAdditionalImages = async (
             if (part?.inlineData) {
                 const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
                 const blob = await res.blob();
-                return { name: `gen_styled_${shotIndex + 1}_${Date.now()}.png`, blob };
+                return { name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob };
             }
         } catch (error) { console.error(error); }
         return null;
@@ -151,7 +180,7 @@ export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, 
     const imagePart = await fileToGenerativePart(imageFile);
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
-        contents: { parts: [imagePart, { text: `Change color of the object from ${sourceColorHex} to ${targetColorHex}. Maintain texture and shading.` }] },
+        contents: { parts: [imagePart, { text: `Change color of the object from ${sourceColorHex} to ${targetColorHex}. Maintain texture and shading exactly.` }] },
     });
     const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
     if (!part?.inlineData) throw new Error("Błąd.");

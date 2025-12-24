@@ -18,6 +18,7 @@ declare const JSZip: any;
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
 type ExportStatus = 'idle' | 'exporting' | 'success' | 'error';
+export type BackgroundIntensity = 'calm' | 'normal' | 'crazy';
 
 export interface ModelDimensions {
     x: number;
@@ -46,6 +47,7 @@ export const App: React.FC = () => {
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [additionalInfo, setAdditionalInfo] = useState<string>('');
   const [imageStylePrompt, setImageStylePrompt] = useState<string>('');
+  const [backgroundIntensity, setBackgroundIntensity] = useState<BackgroundIntensity>('normal');
   const [auctionTitle, setAuctionTitle] = useState<string>('');
   const [descriptionParts, setDescriptionParts] = useState<string[]>([]);
   const [sku, setSku] = useState<string>('');
@@ -60,7 +62,6 @@ export const App: React.FC = () => {
   const [loadingMessage, setLoadingMessage] = useState<string>('Przygotowywanie...');
   const [isPackaging, setIsPackaging] = useState<boolean>(false);
   
-  // Przechowujemy obraz bazowy dla AI, aby móc go użyć przy regeneracji pojedynczych slotów
   const [baseImageForAi, setBaseImageForAi] = useState<Blob | null>(null);
 
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
@@ -177,9 +178,7 @@ export const App: React.FC = () => {
       setBaseImageForAi(baseForAi);
 
       if (baseForAi) {
-          const aiGensPromise = imageStylePrompt.trim() 
-            ? generateAdditionalImages(baseForAi, title, 3, imageStylePrompt) 
-            : Promise.resolve([]);
+          const aiGensPromise = generateAdditionalImages(baseForAi, title, 3, imageStylePrompt, 0, backgroundIntensity);
           
           const whiteBgPromise = (userImages.length > 0) 
             ? addWhiteBackground(userImages[0].blob).catch(() => userImages[0].blob)
@@ -190,7 +189,6 @@ export const App: React.FC = () => {
           if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg });
           finalGallery.push(...aiGens);
           
-          // Uzupełnienie galerii do 4 zdjęć innymi renderami lub zdjęciami
           modelRenders.forEach(r => { if (finalGallery.length < 4) finalGallery.push(r); });
           userImages.forEach(u => { if (finalGallery.length < 4) finalGallery.push(u); });
       }
@@ -200,25 +198,19 @@ export const App: React.FC = () => {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Wystąpił błąd.');
     } finally { setIsLoading(false); }
-  }, [modelFile, imageFiles, costSettings, additionalInfo, imageStylePrompt]);
+  }, [modelFile, imageFiles, costSettings, additionalInfo, imageStylePrompt, backgroundIntensity]);
 
   const handleRegenerateImage = async (index: number) => {
       if (!baseImageForAi || !auctionTitle) return;
-      
-      // Slot 0 to zazwyczaj zdjęcie na białym tle, sloty 1-3 to wariacje AI
-      // Jeśli regenerujemy slot 1-3, używamy generateAdditionalImages z odpowiednim offsetem
       try {
           let newImage: { name: string; blob: Blob } | null = null;
-          
           if (index === 0) {
               const newBlob = await addWhiteBackground(baseImageForAi);
               newImage = { name: 'main_product_refreshed.png', blob: newBlob };
           } else {
-              // Prosimy o 1 nową wariację, używając indeksu jako ziarna dla typu ujęcia
-              const results = await generateAdditionalImages(baseImageForAi, auctionTitle, 1, imageStylePrompt, index);
+              const results = await generateAdditionalImages(baseImageForAi, auctionTitle, 1, imageStylePrompt, index, backgroundIntensity);
               if (results.length > 0) newImage = results[0];
           }
-
           if (newImage) {
               setSelectedImages(prev => {
                   const updated = [...prev];
@@ -226,9 +218,7 @@ export const App: React.FC = () => {
                   return updated;
               });
           }
-      } catch (err) {
-          console.error("Błąd regeneracji:", err);
-      }
+      } catch (err) { console.error("Błąd regeneracji:", err); }
   };
 
   const handleExport = async (credentials: any) => {
@@ -307,8 +297,31 @@ export const App: React.FC = () => {
                   <textarea value={additionalInfo} onChange={e => setAdditionalInfo(e.target.value)} placeholder="Np. Przeznaczenie, pasujące modele..." className="w-full h-16 p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold text-cyan-400 mb-2">Styl i tło zdjęć AI (opcjonalnie)</label>
-                  <textarea value={imageStylePrompt} onChange={e => setImageStylePrompt(e.target.value)} placeholder="Np. 'Na drewnianym stole w warsztacie', 'Styl cyberpunk'..." className="w-full h-16 p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
+                  <label className="block text-sm font-semibold text-cyan-400 mb-2">Intensywność tła AI</label>
+                  <div className="flex bg-slate-900 p-1 rounded-lg border border-gray-700">
+                    <button 
+                      onClick={() => setBackgroundIntensity('calm')} 
+                      className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'calm' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                      Spokojne
+                    </button>
+                    <button 
+                      onClick={() => setBackgroundIntensity('normal')} 
+                      className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'normal' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                      Normalne
+                    </button>
+                    <button 
+                      onClick={() => setBackgroundIntensity('crazy')} 
+                      className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'crazy' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                    >
+                      Szalone
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-cyan-400 mb-2">Własny styl tła (opcjonalnie)</label>
+                  <input type="text" value={imageStylePrompt} onChange={e => setImageStylePrompt(e.target.value)} placeholder="Np. 'Styl cyberpunk', 'Antyczne wnętrze'..." className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
                 </div>
               </div>
 
