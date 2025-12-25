@@ -24,18 +24,16 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     let objectToFrame: THREE.Object3D;
     const geometriesToDispose: THREE.BufferGeometry[] = [];
     
-    // MATERIAL: STUDIO CLAY (WHITE MATTE)
-    // This looks like a plaster cast. It creates excellent contrast for geometry
-    // without looking dark or metallic.
+    // MATERIAL: NEUTRAL GREY PLASTIC - Optimized for AI-to-Image input
     const baseMaterial = new THREE.MeshStandardMaterial({
-        color: 0xEFEFEF,     // Almost white
-        roughness: 0.8,      // Matte finish (clay/plaster)
-        metalness: 0.0,      // Non-metallic
+        color: 0xDDDDDD,     // Standard Grey
+        roughness: 0.5,      // Semi-gloss/Plastic look (easier for AI to texture than dry clay)
+        metalness: 0.1,      // Slight reflectivity
         flatShading: false,
     });
     
-    // Subtle edge lines to help with definition, but not overpowering
-    const lineMaterial = new THREE.LineBasicMaterial({ color: 0x333333, linewidth: 1, transparent: true, opacity: 0.2 });
+    // Very subtle lines, just enough for definition but not to look like a sketch
+    const lineMaterial = new THREE.LineBasicMaterial({ color: 0x222222, linewidth: 1, transparent: true, opacity: 0.15 });
 
     const fileBuffer = await modelFile.arrayBuffer();
 
@@ -55,9 +53,35 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         const size = new THREE.Vector3();
         box.getSize(size);
         dimensions = { x: size.x, y: size.y, z: size.z };
+        
+        // 3MF PRESERVATION LOGIC
         objectToFrame.traverse(child => {
             if (child instanceof THREE.Mesh) {
-                child.material = baseMaterial;
+                // If the 3MF loaded a material, we KEEP it to preserve color.
+                // We only adjust properties to make it look good in our lighting.
+                if (child.material) {
+                    // Handle array of materials or single material
+                    const materials = Array.isArray(child.material) ? child.material : [child.material];
+                    
+                    materials.forEach(mat => {
+                        // Ensure it reacts to light properly
+                        mat.needsUpdate = true;
+                        
+                        // If it's a Standard or Phong material, we can tune it for plastic look
+                        if ('roughness' in mat) {
+                             // If roughness is default (1), make it smoother like plastic (0.5)
+                             if (mat.roughness === 1) mat.roughness = 0.5;
+                        }
+                        if ('metalness' in mat) {
+                             mat.metalness = 0.1;
+                        }
+                        mat.flatShading = false;
+                    });
+                } else {
+                    // Fallback only if no material exists
+                    child.material = baseMaterial;
+                }
+
                 child.castShadow = true;
                 child.receiveShadow = true;
                 addEdgesToMesh(child);
@@ -86,32 +110,30 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     scene.background = new THREE.Color(0xffffff); // White background
 
     // CAMERA RIG SETUP
-    // Instead of static lights, we attach lights TO THE CAMERA.
-    // This ensures the object is always perfectly lit from the viewer's perspective.
     const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 10000);
     scene.add(camera);
 
-    // 1. Key Light (Top-Right relative to camera)
+    // 1. Key Light
     const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
     keyLight.position.set(10, 10, 10);
     keyLight.castShadow = true;
     keyLight.shadow.bias = -0.0001;
-    keyLight.shadow.mapSize.width = 2048; // Sharp shadows
+    keyLight.shadow.mapSize.width = 2048;
     keyLight.shadow.mapSize.height = 2048;
-    camera.add(keyLight); // Move with camera
+    camera.add(keyLight);
 
-    // 2. Fill Light (Left relative to camera, softer)
+    // 2. Fill Light
     const fillLight = new THREE.DirectionalLight(0xeef2ff, 0.6);
     fillLight.position.set(-10, 0, 10);
     fillLight.castShadow = false;
     camera.add(fillLight);
 
-    // 3. Rim/Back Light (Behind, helps separate edges)
+    // 3. Rim/Back Light
     const rimLight = new THREE.DirectionalLight(0xffffff, 0.4);
     rimLight.position.set(0, 10, -10);
     camera.add(rimLight);
 
-    // Ambient light for base visibility
+    // Ambient light
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
 
@@ -125,19 +147,16 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
 
     // CENTER & SCALE
     const box = new THREE.Box3().setFromObject(objectToFrame);
-    const size = new THREE.Vector3();
-    box.getSize(size);
+    const sizeVec = new THREE.Vector3();
+    box.getSize(sizeVec);
     const center = box.getCenter(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
+    const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
     
     objectToFrame.position.sub(center); 
 
     // Move camera back enough to fit object
     const distance = maxDim * 2.2;
 
-    // PLANETARY SCANNER (26 ANGLES)
-    // We keep the planetary logic because it guarantees we find the front,
-    // but now every single angle will be beautifully lit "Studio Style".
     const views: { name: string; pos: THREE.Vector3; up: THREE.Vector3 }[] = [];
 
     const addView = (name: string, x: number, y: number, z: number, upX: number, upY: number, upZ: number) => {
@@ -148,20 +167,20 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         });
     };
 
-    // 1. EQUATORIAL RING (Standard Y-up rotation)
+    // 1. EQUATORIAL RING
     for (let i = 0; i < 8; i++) {
         const angle = (i * 45) * (Math.PI / 180);
         addView(`ring_y_${i * 45}.png`, Math.sin(angle), 0, Math.cos(angle), 0, 1, 0);
     }
 
-    // 2. POLAR RING (Orbiting over the top/bottom - X axis)
+    // 2. POLAR RING
     for (let i = 0; i < 8; i++) {
         if (i === 0 || i === 4) continue; 
         const angle = (i * 45) * (Math.PI / 180);
         addView(`ring_x_${i * 45}.png`, 0, Math.sin(angle), Math.cos(angle), 0, Math.cos(angle + Math.PI/2), -Math.sin(angle + Math.PI/2));
     }
 
-    // 3. ISOMETRIC CORNERS (Best for "Style" shots)
+    // 3. ISOMETRIC CORNERS
     const isoDist = 1;
     addView('iso_top_fr.png', isoDist, isoDist, isoDist, 0, 1, 0);
     addView('iso_top_fl.png', -isoDist, isoDist, isoDist, 0, 1, 0);
@@ -184,8 +203,6 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         camera.up.copy(v.up);
         camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
-
-        // NOTE: Lights move automatically because they are children of 'camera'
         
         renderer.render(scene, camera);
         const blob = await new Promise<Blob | null>(res => renderer.domElement.toBlob(res, 'image/png'));

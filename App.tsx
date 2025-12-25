@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
@@ -12,11 +13,14 @@ import { exportToWooCommerce, exportToBaseLinker } from './services/exportServic
 import { CostAnalysis, CostAnalysisResult } from './components/CostAnalysis';
 import { CostSettingsModal } from './components/CostSettingsModal';
 import { PrintCostEstimator } from './components/PrintCostEstimator';
-import JSZip from 'jszip';
+import { VirtualStudio } from './components/VirtualStudio';
+
+declare const JSZip: any;
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
 type ExportStatus = 'idle' | 'exporting' | 'success' | 'error';
 export type BackgroundIntensity = 'calm' | 'normal' | 'crazy';
+type Tab = 'generator' | 'studio';
 
 export interface ModelDimensions {
     x: number;
@@ -41,6 +45,8 @@ export interface PrintCost {
 }
 
 export const App: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<Tab>('generator');
+
   const [modelFile, setModelFile] = useState<File | null>(null);
   const [imageFiles, setImageFiles] = useState<File[]>([]);
   const [additionalInfo, setAdditionalInfo] = useState<string>('');
@@ -154,9 +160,6 @@ export const App: React.FC = () => {
         const { images, dimensions: modelDims, weight: modelW } = await generateImagesFromModel(modelToProcess);
         
         // INTELLIGENT SORTING:
-        // Sort renders by file size (Entropy).
-        // Larger PNG files = More visual information (Edges, Features, Lines).
-        // Smaller PNG files = Smooth surfaces (Back of objects).
         const sortedRenders = [...images].sort((a, b) => b.size - a.size);
         
         // Take the top 4 most "interesting" angles
@@ -202,7 +205,8 @@ export const App: React.FC = () => {
 
       if (baseBlobs.length > 0 && bestForWhiteBg) {
           // 1. Generate Main White BG Shot
-          const whiteBgPromise = addWhiteBackground(bestForWhiteBg).catch(() => bestForWhiteBg);
+          // Pass 'title' as context so it knows WHAT to texture
+          const whiteBgPromise = addWhiteBackground(bestForWhiteBg, title).catch(() => bestForWhiteBg);
           
           // 2. Generate Lifestyle Shots 
           // Use the top 3 distinct angles we found to create variation
@@ -233,7 +237,8 @@ export const App: React.FC = () => {
       try {
           let newImage: { name: string; blob: Blob } | null = null;
           if (index === 0) {
-              const newBlob = await addWhiteBackground(baseImageForAi);
+              // Pass auctionTitle here too for context
+              const newBlob = await addWhiteBackground(baseImageForAi, auctionTitle);
               newImage = { name: 'main_product_refreshed.png', blob: newBlob };
           } else {
               const sources = sourceRenderBlobs.length > 0 ? sourceRenderBlobs : baseImageForAi;
@@ -293,9 +298,7 @@ export const App: React.FC = () => {
     try {
         const zip = new JSZip();
         const genFolder = zip.folder("_WYGENEROWANE");
-        if (genFolder) {
-            for (const image of selectedImages) genFolder.file(image.name, image.blob, { binary: true });
-        }
+        for (const image of selectedImages) genFolder.file(image.name, image.blob, { binary: true });
         let content = `TYTUŁ: ${auctionTitle}\n\nOPIS:\n${descriptionParts.join('\n\n')}`;
         zip.file("opis.txt", content);
         const zipBlob = await zip.generateAsync({ type: "blob" });
@@ -311,78 +314,103 @@ export const App: React.FC = () => {
     <div className="min-h-screen bg-slate-950 text-gray-100 flex flex-col items-center p-4 sm:p-6 lg:p-8">
       <div className="w-full max-w-5xl">
         <Header />
-        <main className="relative mt-8 bg-slate-900 rounded-2xl shadow-2xl p-6 sm:p-8 border border-slate-800">
-          <div className="absolute top-4 right-4">
-             <button onClick={() => setIsCostSettingsModalOpen(true)} className="p-2 rounded-full text-gray-400 hover:text-cyan-300">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-              </button>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-            <div className="flex flex-col gap-6">
-              <FileUpload id="model-upload" label="Wgraj model 3D (STL/3MF)" accept=".stl,.3mf,.zip" onChange={e => setModelFile(e.target.files?.[0] || null)} fileName={modelFile?.name} icon={<svg className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-14L4 7m0 0l8 4m-8-4v10l8 4" /></svg>} />
-              <FileUpload id="image-upload" label="Zdjęcia bazowe (opcjonalnie)" accept="image/*" onChange={e => setImageFiles(Array.from(e.target.files || []))} fileName={imageFiles.length > 0 ? `${imageFiles.length} zdjęć` : undefined} icon={<svg className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01" /></svg>} multiple />
-              
-              <div className="space-y-4 bg-slate-800/40 p-4 rounded-xl border border-gray-700">
-                <div>
-                  <label className="block text-sm font-semibold text-cyan-400 mb-2">Opis produktu (opcjonalnie)</label>
-                  <textarea value={additionalInfo} onChange={e => setAdditionalInfo(e.target.value)} placeholder="Np. Przeznaczenie, pasujące modele..." className="w-full h-16 p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-cyan-400 mb-2">Intensywność tła AI</label>
-                  <div className="flex bg-slate-900 p-1 rounded-lg border border-gray-700">
-                    <button 
-                      onClick={() => setBackgroundIntensity('calm')} 
-                      className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'calm' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
-                    >
-                      Spokojne
-                    </button>
-                    <button 
-                      onClick={() => setBackgroundIntensity('normal')} 
-                      className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'normal' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
-                    >
-                      Normalne
-                    </button>
-                    <button 
-                      onClick={() => setBackgroundIntensity('crazy')} 
-                      className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'crazy' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
-                    >
-                      Szalone
-                    </button>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-cyan-400 mb-2">Własny styl tła (opcjonalnie)</label>
-                  <input type="text" value={imageStylePrompt} onChange={e => setImageStylePrompt(e.target.value)} placeholder="Np. 'Styl cyberpunk', 'Antyczne wnętrze'..." className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
-                </div>
-              </div>
+        
+        {/* TABS NAVIGATION */}
+        <div className="flex justify-center mt-8 mb-6">
+            <div className="bg-slate-900 p-1 rounded-xl border border-gray-700 flex">
+                <button
+                    onClick={() => setActiveTab('generator')}
+                    className={`px-6 py-2 rounded-lg font-bold transition-all ${activeTab === 'generator' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                >
+                    Generator 3D (Allegro)
+                </button>
+                <button
+                    onClick={() => setActiveTab('studio')}
+                    className={`px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 ${activeTab === 'studio' ? 'bg-purple-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                    Wirtualne Studio
+                </button>
+            </div>
+        </div>
 
-              <button onClick={handleGenerate} disabled={isLoading} className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg shadow-lg shadow-cyan-500/20 transform transition-all hover:scale-105">
-                {isLoading ? 'Pracuję...' : 'Generuj Szybką Ofertę'}
-              </button>
+        {activeTab === 'studio' ? (
+            <VirtualStudio />
+        ) : (
+            <main className="relative bg-slate-900 rounded-2xl shadow-2xl p-6 sm:p-8 border border-slate-800">
+            <div className="absolute top-4 right-4">
+                <button onClick={() => setIsCostSettingsModalOpen(true)} className="p-2 rounded-full text-gray-400 hover:text-cyan-300">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                </button>
             </div>
-            <ImagePreview imageFile={imageFiles[0] || modelFile} />
-          </div>
-          {isLoading && <Loader message={loadingMessage} />}
-          {selectedImages.length > 0 && !isLoading && (
-            <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
-              <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => d ? {...d, [a]: v*10} : null)} weight={weight} onWeightChange={setWeight} />
-              <SelectedImagesPreview 
-                images={selectedImages} 
-                onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} 
-                onColorChange={async () => {}} 
-                onRegenerate={handleRegenerateImage}
-              />
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-                {printCost && <PrintCostEstimator cost={printCost} />}
-                <CostAnalysis status={costAnalysisStatus} result={costAnalysisResult} error={costAnalysisError} onAnalyze={handleAnalyzeCost} />
-              </div>
-              <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
-                  <button onClick={handleDownloadPackage} disabled={isPackaging} className="px-8 py-3 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-lg shadow-lg transition-all">Pobierz pakiet .zip</button>
-                  <button onClick={() => {setExportPlatform('baselinker'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow-lg">Eksportuj do BaseLinker</button>
-              </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="flex flex-col gap-6">
+                <FileUpload id="model-upload" label="Wgraj model 3D (STL/3MF)" accept=".stl,.3mf,.zip" onChange={e => setModelFile(e.target.files?.[0] || null)} fileName={modelFile?.name} icon={<svg className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-14L4 7m0 0l8 4m-8-4v10l8 4" /></svg>} />
+                <FileUpload id="image-upload" label="Zdjęcia bazowe (opcjonalnie)" accept="image/*" onChange={e => setImageFiles(Array.from(e.target.files || []))} fileName={imageFiles.length > 0 ? `${imageFiles.length} zdjęć` : undefined} icon={<svg className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01" /></svg>} multiple />
+                
+                <div className="space-y-4 bg-slate-800/40 p-4 rounded-xl border border-gray-700">
+                    <div>
+                    <label className="block text-sm font-semibold text-cyan-400 mb-2">Opis produktu (opcjonalnie)</label>
+                    <textarea value={additionalInfo} onChange={e => setAdditionalInfo(e.target.value)} placeholder="Np. Przeznaczenie, pasujące modele..." className="w-full h-16 p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
+                    </div>
+                    <div>
+                    <label className="block text-sm font-semibold text-cyan-400 mb-2">Intensywność tła AI</label>
+                    <div className="flex bg-slate-900 p-1 rounded-lg border border-gray-700">
+                        <button 
+                        onClick={() => setBackgroundIntensity('calm')} 
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'calm' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                        >
+                        Spokojne
+                        </button>
+                        <button 
+                        onClick={() => setBackgroundIntensity('normal')} 
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'normal' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                        >
+                        Normalne
+                        </button>
+                        <button 
+                        onClick={() => setBackgroundIntensity('crazy')} 
+                        className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'crazy' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                        >
+                        Szalone
+                        </button>
+                    </div>
+                    </div>
+                    <div>
+                    <label className="block text-sm font-semibold text-cyan-400 mb-2">Własny styl tła (opcjonalnie)</label>
+                    <input type="text" value={imageStylePrompt} onChange={e => setImageStylePrompt(e.target.value)} placeholder="Np. 'Styl cyberpunk', 'Antyczne wnętrze'..." className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
+                    </div>
+                </div>
+
+                <button onClick={handleGenerate} disabled={isLoading} className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg shadow-lg shadow-cyan-500/20 transform transition-all hover:scale-105">
+                    {isLoading ? 'Pracuję...' : 'Generuj Szybką Ofertę'}
+                </button>
+                </div>
+                <ImagePreview imageFile={imageFiles[0] || modelFile} />
             </div>
-          )}
-        </main>
+            {isLoading && <Loader message={loadingMessage} />}
+            {selectedImages.length > 0 && !isLoading && (
+                <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
+                <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => d ? {...d, [a]: v*10} : null)} weight={weight} onWeightChange={setWeight} />
+                <SelectedImagesPreview 
+                    images={selectedImages} 
+                    onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} 
+                    onColorChange={async () => {}} 
+                    onRegenerate={handleRegenerateImage}
+                />
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                    {printCost && <PrintCostEstimator cost={printCost} />}
+                    <CostAnalysis status={costAnalysisStatus} result={costAnalysisResult} error={costAnalysisError} onAnalyze={handleAnalyzeCost} />
+                </div>
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
+                    <button onClick={handleDownloadPackage} disabled={isPackaging} className="px-8 py-3 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-lg shadow-lg transition-all">Pobierz pakiet .zip</button>
+                    <button onClick={() => {setExportPlatform('baselinker'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow-lg">Eksportuj do BaseLinker</button>
+                </div>
+                </div>
+            )}
+            </main>
+        )}
+
         {isExportModalOpen && (
           <ExportModal 
             isOpen={isExportModalOpen} 

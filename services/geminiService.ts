@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { BackgroundIntensity } from "../App";
 
@@ -63,11 +64,7 @@ export const generateAllegroDescription = async (
       },
     },
   });
-  
-  const responseText = response.text;
-  if (!responseText) throw new Error("Błąd generowania: AI nie zwróciło tekstu.");
-  
-  const jsonResponse = parseJsonResponse(responseText);
+  const jsonResponse = parseJsonResponse(response.text);
   return {
     auctionTitle: jsonResponse.auction_title,
     descriptionParts: jsonResponse.description_parts,
@@ -78,7 +75,7 @@ export const generateAllegroDescription = async (
   };
 };
 
-export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
+export const addWhiteBackground = async (imageFile: Blob, context: string = "Product"): Promise<Blob> => {
   if (!process.env.API_KEY) throw new Error("Brak klucza API.");
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const imagePart = await fileToGenerativePart(imageFile);
@@ -87,13 +84,17 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: { parts: [imagePart, { text: `
-      TASK: Create a pure white background product shot.
+      TASK: This is a raw 3D render of: ${context}.
+      ACTION: Create a FINAL PRODUCTION QUALITY product photo on a pure white background.
       
-      STRICT RULES:
-      1. KEEP THE OBJECT GEOMETRY EXACTLY AS IS. The input image has explicit outlines/edges to show details. PRESERVE THEM.
-      2. Do not change the object's shape or texture. 
-      3. REMOVE BACKGROUND ONLY. Replace everything around the object with hex color #FFFFFF.
-      4. NO TEXT.
+      CRITICAL INSTRUCTIONS:
+      1. SHAPE LOCK: Keep the object's silhouette/outline exactly as it is in the input image.
+      2. MATERIALIZATION (IMPORTANT): The input looks like grey clay. YOU MUST PAINT IT.
+         - If it's a figurine -> paint it like realistic plastic/resin or metal.
+         - If it's a tool -> paint it like plastic/steel.
+         - Do not leave it looking like untextured grey geometry.
+      3. Background: Hex color #FFFFFF.
+      4. Lighting: Soft commercial studio lighting.
     `.trim() }] },
     config: { imageConfig: { aspectRatio: ratio } }
   });
@@ -106,8 +107,10 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
 const VARIATION_SHOTS = [
   { desc: "Placed on a modern wooden desk. Soft window lighting." },
   { desc: "Minimalist concrete surface. High-end tech vibe." },
-  { desc: "Held in a hand (blurred background). Lifestyle context." },
-  { desc: "Creative colorful studio background." }
+  // 3rd Shot: Shelf (Safe)
+  { desc: "Sitting on a clean white floating shelf. Defocused living room background." }, 
+  // 4th Shot: Dark Tech Studio (Safe)
+  { desc: "Professional studio photography. Dark grey matte background. High contrast rim lighting. Tech gadget aesthetic." }
 ];
 
 const INTENSITY_CONFIG = {
@@ -149,18 +152,17 @@ export const generateAdditionalImages = async (
         const shot = VARIATION_SHOTS[shotIndex];
         
         const fullPrompt = `
-          TASK: Composite this specific 3D object into a background.
+          TASK: Create a photorealistic product shot based on this 3D render of: ${auctionTitle}.
           
-          CRITICAL INSTRUCTIONS:
-          1. OBJECT LOCK: The object in the foreground is a specific 3D print render. **DO NOT CHANGE ITS GEOMETRY.**
-          2. DETAILS: The input image uses grey shading and dark lines to show details (logos, grooves). PRESERVE THESE DETAILS.
-          3. COLORIZATION: You may adjust the object's color slightly (e.g. to black or dark plastic) to match the scene, but DO NOT LOSE THE EMBOSSED DETAILS shown by the lines.
-          4. NO RE-DRAWING: Do not invent new shapes.
+          RULES:
+          1. GEOMETRY (STRICT): The silhouette/shape must NOT change. Do not add limbs, do not distort proportions.
+          2. SURFACE (CREATIVE): The input is an untextured model. You MUST apply realistic materials (plastic, metal, resin) appropriate for "${auctionTitle}". 
+          3. Do not output the grey "clay" look. Make it look like a finished physical product.
           
-          SCENE SETTINGS:
+          SCENE:
           - Context: ${userStylePrompt || config.baseTheme}
           - Specific Setting: ${shot.desc}
-          - Lighting: ${config.lighting} (Apply to background)
+          - Lighting: ${config.lighting} (Apply to environment)
         `.trim();
 
         try {
@@ -182,6 +184,66 @@ export const generateAdditionalImages = async (
     const results = await Promise.all(tasks);
     return results.filter((r): r is { name: string; blob: Blob } => r !== null);
 };
+
+// --- NEW FUNCTION FOR VIRTUAL STUDIO ---
+export const generateStudioProImages = async (
+    sourceImage: Blob,
+    stylePrompt: string,
+    count: number
+): Promise<{ name: string; blob: Blob }[]> => {
+    if (!process.env.API_KEY || count <= 0) return [];
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const imagePart = await fileToGenerativePart(sourceImage);
+    const ratio = await detectAspectRatio(sourceImage);
+
+    // Generate multiple variations in parallel with FORCED ANGLES
+    const tasks = Array.from({ length: count }).map(async (_, i) => {
+        
+        // Define distinct angles for each variation to avoid "flat" look
+        const angleStrategies = [
+            "CAMERA: 3/4 Isometric View (approx 30 degrees elevation). Show top and front-side clearly. Avoid flat front view.",
+            "CAMERA: Dynamic Low Angle (Hero Shot). Look slightly up at the object to give it presence.",
+            "CAMERA: Side Profile 45 degrees. Shallow depth of field (blurred background) to emphasize the object."
+        ];
+        
+        const selectedAngle = angleStrategies[i % angleStrategies.length];
+
+        const prompt = `
+            Professional product photography. High-end e-commerce commercial shot.
+            TASK: Place the product in the input image into a new environment.
+            STYLE: ${stylePrompt}
+            
+            ${selectedAngle}
+            
+            REQUIREMENTS:
+            1. PERSPECTIVE: You MUST adapt the object perspective to match the requested camera angle. It should look like a 3D object sitting in a 3D space, not a flat 2D cutout.
+            2. IDENTITY: Preserve the core visual features (colors, logos, texture) of the product, but you are allowed to slightly rotate the perspective to achieve the 3/4 view.
+            3. LIGHTING: Use professional studio lighting (softbox, rim light) to highlight the product's texture.
+            4. QUALITY: 8k resolution, crisp focus on the product, bokeh/blurred background if appropriate.
+            
+            Variation seed: ${Date.now() + i}
+        `;
+
+        try {
+            const response = await ai.models.generateContent({
+                model: 'gemini-2.5-flash-image',
+                contents: { parts: [imagePart, { text: prompt }] },
+                config: { imageConfig: { aspectRatio: ratio } }
+            });
+            const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+            if (part?.inlineData) {
+                const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+                const blob = await res.blob();
+                return { name: `studio_pro_${i + 1}_${Date.now()}.png`, blob };
+            }
+        } catch (e) { console.error("Studio gen error", e); }
+        return null;
+    });
+
+    const results = await Promise.all(tasks);
+    return results.filter((r): r is { name: string; blob: Blob } => r !== null);
+};
+
 
 export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, targetColorHex: string): Promise<Blob> => {
     if (!process.env.API_KEY) throw new Error("Brak klucza API.");
@@ -207,10 +269,7 @@ export const analyzePricing = async (imageFile: Blob, auctionTitle: string): Pro
     config: { tools: [{googleSearch: {}}] },
   });
   try {
-    const responseText = response.text;
-    if (!responseText) throw new Error("Brak odpowiedzi tekstowej.");
-    
-    const json = parseJsonResponse(responseText);
+    const json = parseJsonResponse(response.text);
     return { products: (json.products || []).map((p:any) => ({ productTitle: p.product_title, pricePln: p.price_pln, productUrl: p.product_url })) };
   } catch (e) { return { products: [] }; }
 };
