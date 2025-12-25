@@ -84,17 +84,16 @@ export const addWhiteBackground = async (imageFile: Blob, context: string = "Pro
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: { parts: [imagePart, { text: `
-      TASK: This is a raw 3D render of: ${context}.
-      ACTION: Create a FINAL PRODUCTION QUALITY product photo on a pure white background.
+      TASK: Enhance this image of a "${context}" into a FINAL PRODUCT PHOTO.
       
-      CRITICAL INSTRUCTIONS:
-      1. SHAPE LOCK: Keep the object's silhouette/outline exactly as it is in the input image.
-      2. MATERIALIZATION (IMPORTANT): The input looks like grey clay. YOU MUST PAINT IT.
-         - If it's a figurine -> paint it like realistic plastic/resin or metal.
-         - If it's a tool -> paint it like plastic/steel.
-         - Do not leave it looking like untextured grey geometry.
-      3. Background: Hex color #FFFFFF.
-      4. Lighting: Soft commercial studio lighting.
+      INSTRUCTIONS:
+      1. BACKGROUND: Pure White (#FFFFFF).
+      2. GEOMETRY: LOCK THE SHAPE. Do not change the outline/silhouette at all.
+      3. COLOR & MATERIAL: 
+         - IF the input object has clear colors (e.g. brown, red, blue), KEEP THEM EXACTLY AS IS. Do not change the object's color.
+         - ONLY IF the input is a solid grey untextured 3D render, then apply realistic materials (Metal/Plastic/Resin).
+      4. LIGHTING: Studio lighting, soft shadows.
+      5. NEGATIVE: NO TEXT, NO LABELS, NO SIGNS, NO WATERMARKS, NO STANDS WITH TEXT.
     `.trim() }] },
     config: { imageConfig: { aspectRatio: ratio } }
   });
@@ -105,28 +104,35 @@ export const addWhiteBackground = async (imageFile: Blob, context: string = "Pro
 };
 
 const VARIATION_SHOTS = [
-  { desc: "Placed on a modern wooden desk. Soft window lighting." },
-  { desc: "Minimalist concrete surface. High-end tech vibe." },
-  // 3rd Shot: Shelf (Safe)
-  { desc: "Sitting on a clean white floating shelf. Defocused living room background." }, 
-  // 4th Shot: Dark Tech Studio (Safe)
-  { desc: "Professional studio photography. Dark grey matte background. High contrast rim lighting. Tech gadget aesthetic." }
+  // Shot 1: Office/Desk (Lifestyle)
+  { desc: "Setting: Premium wooden desk. Lighting: Cinematic natural daylight. Camera: Eye-level product shot." },
+  
+  // Shot 2: Dark Studio
+  { desc: "Setting: Dark elegant studio surface. Lighting: Dramatic rim lighting (blue/orange). Camera: Slightly low angle hero shot." },
+  
+  // Shot 3: Interior/Living Room
+  { desc: "Setting: Modern bright living room coffee table. Lighting: Soft ambient cozy light. Camera: 3/4 angle view." },
+  
+  // Shot 4: Macro/Detail
+  { desc: "Setting: Neutral professional surface. Lighting: Softbox studio light. Camera: Macro close-up, shallow depth of field." }
 ];
 
 const INTENSITY_CONFIG = {
   calm: {
-    baseTheme: "Clean, minimalist, professional.",
+    baseTheme: "Clean, minimalist.",
     lighting: "Soft, diffused."
   },
   normal: {
-    baseTheme: "Modern, daily life context.",
-    lighting: "Natural."
+    baseTheme: "Modern, realistic.",
+    lighting: "Cinematic, volumetric."
   },
   crazy: {
     baseTheme: "Dramatic, high contrast, artistic.",
-    lighting: "Cinematic."
+    lighting: "Dynamic, colorful."
   }
 };
+
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const generateAdditionalImages = async (
   sourceImages: Blob | Blob[],
@@ -143,7 +149,10 @@ export const generateAdditionalImages = async (
     const inputs = Array.isArray(sourceImages) ? sourceImages : [sourceImages];
     const config = INTENSITY_CONFIG[intensity];
 
-    const tasks = Array.from({ length: count }).map(async (_, i) => {
+    const results: { name: string; blob: Blob }[] = [];
+
+    // EXECUTE SEQUENTIALLY TO AVOID 429 RATE LIMITS
+    for (let i = 0; i < count; i++) {
         const sourceBlob = inputs[i % inputs.length];
         const imagePart = await fileToGenerativePart(sourceBlob);
         const ratio = await detectAspectRatio(sourceBlob);
@@ -151,18 +160,36 @@ export const generateAdditionalImages = async (
         const shotIndex = (startIndex + i) % VARIATION_SHOTS.length;
         const shot = VARIATION_SHOTS[shotIndex];
         
+        let sceneDescription = "";
+        
+        if (userStylePrompt && userStylePrompt.length > 2) {
+            sceneDescription = `
+                THEME: ${userStylePrompt}.
+                COMPOSITION: Integrate the product into this theme, but strictly follow this camera setup: ${shot.desc}
+            `;
+        } else {
+            sceneDescription = `
+                THEME: ${config.baseTheme}
+                SCENARIO: ${shot.desc}
+            `;
+        }
+
         const fullPrompt = `
-          TASK: Create a photorealistic product shot based on this 3D render of: ${auctionTitle}.
+          TASK: Create a photorealistic product shot of: ${auctionTitle}.
           
           RULES:
-          1. GEOMETRY (STRICT): The silhouette/shape must NOT change. Do not add limbs, do not distort proportions.
-          2. SURFACE (CREATIVE): The input is an untextured model. You MUST apply realistic materials (plastic, metal, resin) appropriate for "${auctionTitle}". 
-          3. Do not output the grey "clay" look. Make it look like a finished physical product.
+          1. GEOMETRY (STRICT): The silhouette/shape must NOT change.
+          2. COLOR (CRITICAL):
+             - IF the input object is COLORED (e.g. brown reindeer, red handle): YOU MUST PRESERVE THE ORIGINAL OBJECT COLORS. Do not camouflage it.
+             - IF the input is GREY CLAY: Apply realistic materials.
+          3. CLEANLINESS: NO TEXT, NO LABELS, NO SIGNS, NO PRICE TAGS, NO WATERMARKS. The surface/background must be clean.
           
           SCENE:
-          - Context: ${userStylePrompt || config.baseTheme}
-          - Specific Setting: ${shot.desc}
-          - Lighting: ${config.lighting} (Apply to environment)
+          ${sceneDescription}
+          
+          Lighting Style: ${config.lighting}
+          Quality: 8k, Unreal Engine 5 Render, highly detailed.
+          Variation Seed: ${Date.now() + i}
         `.trim();
 
         try {
@@ -175,14 +202,18 @@ export const generateAdditionalImages = async (
             if (part?.inlineData) {
                 const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
                 const blob = await res.blob();
-                return { name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob };
+                results.push({ name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob });
             }
-        } catch (error) { console.error(error); }
-        return null;
-    });
+        } catch (error) { 
+            console.error("Gemini Gen Error:", error); 
+            // Continue to next image even if one fails
+        }
+        
+        // Add 2s delay between requests to respect rate limits
+        if (i < count - 1) await delay(2000);
+    }
 
-    const results = await Promise.all(tasks);
-    return results.filter((r): r is { name: string; blob: Blob } => r !== null);
+    return results;
 };
 
 // --- NEW FUNCTION FOR VIRTUAL STUDIO ---
@@ -196,30 +227,30 @@ export const generateStudioProImages = async (
     const imagePart = await fileToGenerativePart(sourceImage);
     const ratio = await detectAspectRatio(sourceImage);
 
-    // Generate multiple variations in parallel with FORCED ANGLES
-    const tasks = Array.from({ length: count }).map(async (_, i) => {
-        
-        // Define distinct angles for each variation to avoid "flat" look
+    const results: { name: string; blob: Blob }[] = [];
+
+    // EXECUTE SEQUENTIALLY TO AVOID 429 RATE LIMITS
+    for (let i = 0; i < count; i++) {
         const angleStrategies = [
-            "CAMERA: 3/4 Isometric View (approx 30 degrees elevation). Show top and front-side clearly. Avoid flat front view.",
-            "CAMERA: Dynamic Low Angle (Hero Shot). Look slightly up at the object to give it presence.",
-            "CAMERA: Side Profile 45 degrees. Shallow depth of field (blurred background) to emphasize the object."
+            "CAMERA: 3/4 Isometric View (approx 30 degrees elevation).",
+            "CAMERA: Dynamic Low Angle (Hero Shot).",
+            "CAMERA: Side Profile 45 degrees."
         ];
         
         const selectedAngle = angleStrategies[i % angleStrategies.length];
 
         const prompt = `
-            Professional product photography. High-end e-commerce commercial shot.
+            Professional product photography.
             TASK: Place the product in the input image into a new environment.
-            STYLE: ${stylePrompt}
+            STYLE/THEME: ${stylePrompt}
             
             ${selectedAngle}
             
             REQUIREMENTS:
-            1. PERSPECTIVE: You MUST adapt the object perspective to match the requested camera angle. It should look like a 3D object sitting in a 3D space, not a flat 2D cutout.
-            2. IDENTITY: Preserve the core visual features (colors, logos, texture) of the product, but you are allowed to slightly rotate the perspective to achieve the 3/4 view.
-            3. LIGHTING: Use professional studio lighting (softbox, rim light) to highlight the product's texture.
-            4. QUALITY: 8k resolution, crisp focus on the product, bokeh/blurred background if appropriate.
+            1. IDENTITY: Preserve the core visual features (COLORS, logos, texture) of the product. If the input is brown, the output must be brown.
+            2. PERSPECTIVE: Adapt the object perspective to match the requested camera angle.
+            3. LIGHTING: Use professional studio lighting.
+            4. NEGATIVE: DO NOT GENERATE ANY TEXT, LABELS, SIGNS, OR PLACARDS.
             
             Variation seed: ${Date.now() + i}
         `;
@@ -234,14 +265,23 @@ export const generateStudioProImages = async (
             if (part?.inlineData) {
                 const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
                 const blob = await res.blob();
-                return { name: `studio_pro_${i + 1}_${Date.now()}.png`, blob };
+                results.push({ name: `studio_pro_${i + 1}_${Date.now()}.png`, blob });
             }
-        } catch (e) { console.error("Studio gen error", e); }
-        return null;
-    });
+        } catch (e) { 
+            console.error("Studio gen error", e); 
+            // If quota exhausted, we might want to throw to inform UI, or just return partial results.
+            // Throwing makes more sense if 0 images are generated.
+            if ((e as any)?.status === 429 || (e as any)?.message?.includes('429')) {
+                // Wait longer if we hit rate limit inside loop, although typically the API throws immediately
+                await delay(5000);
+            }
+        }
+        
+        // Add 2s delay between requests
+        if (i < count - 1) await delay(2000);
+    }
 
-    const results = await Promise.all(tasks);
-    return results.filter((r): r is { name: string; blob: Blob } => r !== null);
+    return results;
 };
 
 

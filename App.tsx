@@ -159,11 +159,31 @@ export const App: React.FC = () => {
         // We now get 9 images (8 angles + 1 top)
         const { images, dimensions: modelDims, weight: modelW } = await generateImagesFromModel(modelToProcess);
         
-        // INTELLIGENT SORTING:
-        const sortedRenders = [...images].sort((a, b) => b.size - a.size);
+        // STRICT DIVERSE ANGLE SELECTION
+        // Instead of sorting by size (which clumps similar views), we explicitly fetch the files by name 
+        // to guarantee rotation in the final gallery.
         
-        // Take the top 4 most "interesting" angles
-        modelRenders = sortedRenders.slice(0, 4).map(f => ({ name: f.name, blob: f as Blob }));
+        // 1. Isometric (Standard 3/4 view)
+        const isoView = images.find(img => img.name === 'iso_top_fr.png') || images[0];
+        
+        // 2. Side Profile (90 degrees) - forces the object to look "sideways"
+        const sideView = images.find(img => img.name === 'ring_y_90.png') || images[2];
+        
+        // 3. Front Face (0 degrees) or Alternative Angle (225 degrees)
+        const frontView = images.find(img => img.name === 'ring_y_0.png') || images.find(img => img.name === 'ring_y_315.png') || images[1];
+        
+        // 4. Detail View (Top)
+        const topView = images.find(img => img.name === 'top_direct.png') || images[3];
+
+        const finalSelection = [isoView, sideView, frontView, topView].filter(Boolean);
+        
+        // Fallback if specific names not found (should not happen with rendererService)
+        if (finalSelection.length < 4) {
+             const remaining = images.filter(img => !finalSelection.includes(img));
+             finalSelection.push(...remaining.slice(0, 4 - finalSelection.length));
+        }
+
+        modelRenders = finalSelection.map(f => ({ name: f.name, blob: f as Blob }));
         
         setDimensions(modelDims);
         setWeight(modelW);
@@ -184,9 +204,10 @@ export const App: React.FC = () => {
           baseBlobs = modelRenders.map(r => r.blob);
       }
       
+      // Store the renders so we can use them for regeneration correctly
       setSourceRenderBlobs(baseBlobs);
       
-      // Use the #1 most detailed image as the main reference for AI
+      // Use the #1 most detailed image as the main reference for AI (usually the best Iso view for models)
       const bestForWhiteBg = baseBlobs[0];
       
       setBaseImageForAi(bestForWhiteBg);
@@ -209,8 +230,9 @@ export const App: React.FC = () => {
           const whiteBgPromise = addWhiteBackground(bestForWhiteBg, title).catch(() => bestForWhiteBg);
           
           // 2. Generate Lifestyle Shots 
-          // Use the top 3 distinct angles we found to create variation
-          const distinctAngles = baseBlobs.slice(0, 3);
+          // CRITICAL: Pass the DIFFERENT ANGLES to generateAdditionalImages
+          // slice(0,3) will take [Iso, Side, Front]
+          const distinctAngles = baseBlobs.slice(0, 3); 
           const aiGensPromise = generateAdditionalImages(distinctAngles, title, 3, imageStylePrompt, 0, backgroundIntensity);
 
           const [whiteBg, aiGens] = await Promise.all([whiteBgPromise, aiGensPromise]);
@@ -218,9 +240,10 @@ export const App: React.FC = () => {
           if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg as Blob });
           finalGallery.push(...aiGens);
           
+          // Fill logic if AI fails
           if (finalGallery.length < 4) {
              modelRenders.forEach(r => {
-                 if (finalGallery.length < 4 && r.blob !== bestForWhiteBg) finalGallery.push(r);
+                 if (finalGallery.length < 4) finalGallery.push(r);
              });
           }
       }
@@ -237,12 +260,18 @@ export const App: React.FC = () => {
       try {
           let newImage: { name: string; blob: Blob } | null = null;
           if (index === 0) {
-              // Pass auctionTitle here too for context
               const newBlob = await addWhiteBackground(baseImageForAi, auctionTitle);
               newImage = { name: 'main_product_refreshed.png', blob: newBlob };
           } else {
-              const sources = sourceRenderBlobs.length > 0 ? sourceRenderBlobs : baseImageForAi;
-              const results = await generateAdditionalImages(sources, auctionTitle, 1, imageStylePrompt, index, backgroundIntensity);
+              // Ensure we pick the correct source angle for regeneration so the rotation stays consistent
+              const sources = sourceRenderBlobs.length > 0 ? sourceRenderBlobs : [baseImageForAi];
+              // UI Index 1 corresponds to sourceRenderBlobs[0] (Iso) in the batch generation logic
+              // UI Index 2 corresponds to sourceRenderBlobs[1] (Side)
+              // UI Index 3 corresponds to sourceRenderBlobs[2] (Front)
+              const sourceIndex = (index - 1) % sources.length;
+              const specificSource = sources[sourceIndex];
+              
+              const results = await generateAdditionalImages(specificSource, auctionTitle, 1, imageStylePrompt, index, backgroundIntensity);
               if (results.length > 0) newImage = results[0];
           }
           if (newImage) {
@@ -378,7 +407,7 @@ export const App: React.FC = () => {
                     </div>
                     <div>
                     <label className="block text-sm font-semibold text-cyan-400 mb-2">Własny styl tła (opcjonalnie)</label>
-                    <input type="text" value={imageStylePrompt} onChange={e => setImageStylePrompt(e.target.value)} placeholder="Np. 'Styl cyberpunk', 'Antyczne wnętrze'..." className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
+                    <input type="text" value={imageStylePrompt} onChange={e => setImageStylePrompt(e.target.value)} placeholder="Np. 'Dżungla', 'Warsztat', 'Cyberpunk'..." className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
                     </div>
                 </div>
 
