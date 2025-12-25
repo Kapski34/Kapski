@@ -293,7 +293,9 @@ export const App: React.FC = () => {
     try {
         const zip = new JSZip();
         const genFolder = zip.folder("_WYGENEROWANE");
-        for (const image of selectedImages) genFolder.file(image.name, image.blob, { binary: true });
+        if (genFolder) {
+            for (const image of selectedImages) genFolder.file(image.name, image.blob, { binary: true });
+        }
         let content = `TYTUŁ: ${auctionTitle}\n\nOPIS:\n${descriptionParts.join('\n\n')}`;
         zip.file("opis.txt", content);
         const zipBlob = await zip.generateAsync({ type: "blob" });

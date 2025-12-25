@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { BackgroundIntensity } from "../App";
 
@@ -64,7 +63,11 @@ export const generateAllegroDescription = async (
       },
     },
   });
-  const jsonResponse = parseJsonResponse(response.text);
+  
+  const responseText = response.text;
+  if (!responseText) throw new Error("Błąd generowania: AI nie zwróciło tekstu.");
+  
+  const jsonResponse = parseJsonResponse(responseText);
   return {
     auctionTitle: jsonResponse.auction_title,
     descriptionParts: jsonResponse.description_parts,
@@ -204,7 +207,10 @@ export const analyzePricing = async (imageFile: Blob, auctionTitle: string): Pro
     config: { tools: [{googleSearch: {}}] },
   });
   try {
-    const json = parseJsonResponse(response.text);
+    const responseText = response.text;
+    if (!responseText) throw new Error("Brak odpowiedzi tekstowej.");
+    
+    const json = parseJsonResponse(responseText);
     return { products: (json.products || []).map((p:any) => ({ productTitle: p.product_title, pricePln: p.price_pln, productUrl: p.product_url })) };
   } catch (e) { return { products: [] }; }
 };
