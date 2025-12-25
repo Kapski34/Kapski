@@ -83,7 +83,15 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
   
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
-    contents: { parts: [imagePart, { text: "FULL FRAME PRESERVATION: Subject isolated on perfect white background (#FFFFFF). Keep original framing and edges. Do not crop. High contrast, sharp edges. No text, no extra objects." }] },
+    contents: { parts: [imagePart, { text: `
+      TASK: Create a pure white background product shot.
+      
+      STRICT RULES:
+      1. KEEP THE OBJECT GEOMETRY EXACTLY AS IS. The input image has explicit outlines/edges to show details. PRESERVE THEM.
+      2. Do not change the object's shape or texture. 
+      3. REMOVE BACKGROUND ONLY. Replace everything around the object with hex color #FFFFFF.
+      4. NO TEXT.
+    `.trim() }] },
     config: { imageConfig: { aspectRatio: ratio } }
   });
   const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
@@ -93,32 +101,29 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
 };
 
 const VARIATION_SHOTS = [
-  { type: "HERO SHOT", desc: "Eye-level perspective. Showcase the whole product clearly." },
-  { type: "DETAIL SHOT", desc: "Macro-style, focus on texture and quality." },
-  { type: "3/4 ANGLE", desc: "Slightly high angle showing depth." },
-  { type: "DRAMATIC VIEW", desc: "Dynamic angle with unique lighting." }
+  { desc: "Placed on a modern wooden desk. Soft window lighting." },
+  { desc: "Minimalist concrete surface. High-end tech vibe." },
+  { desc: "Held in a hand (blurred background). Lifestyle context." },
+  { desc: "Creative colorful studio background." }
 ];
 
 const INTENSITY_CONFIG = {
   calm: {
-    baseTheme: "Clean professional studio setting with neutral minimal background.",
-    lighting: "Soft, uniform morning light, very gentle shadows.",
-    vibe: "Clean, corporate, technical, minimalist."
+    baseTheme: "Clean, minimalist, professional.",
+    lighting: "Soft, diffused."
   },
   normal: {
-    baseTheme: "Modern living room or office interior context.",
-    lighting: "Natural daylight with realistic reflections.",
-    vibe: "Professional, cozy, lifestyle photography."
+    baseTheme: "Modern, daily life context.",
+    lighting: "Natural."
   },
   crazy: {
-    baseTheme: "Epic cinematic environment like futuristic lab, mystical neon forest, or outer space nebula.",
-    lighting: "Dramatic rim lighting, vibrant neon colors, volumetric fog, high contrast.",
-    vibe: "Surreal, imaginative, artistic, high-energy."
+    baseTheme: "Dramatic, high contrast, artistic.",
+    lighting: "Cinematic."
   }
 };
 
 export const generateAdditionalImages = async (
-  mainImageBlob: Blob,
+  sourceImages: Blob | Blob[],
   auctionTitle: string,
   count: number,
   userStylePrompt: string = "",
@@ -127,31 +132,32 @@ export const generateAdditionalImages = async (
 ): Promise<{ name: string; blob: Blob }[]> => {
     if (!process.env.API_KEY || count <= 0) return [];
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const imagePart = await fileToGenerativePart(mainImageBlob);
-    const ratio = await detectAspectRatio(mainImageBlob);
+    
+    // Normalize input to array
+    const inputs = Array.isArray(sourceImages) ? sourceImages : [sourceImages];
     const config = INTENSITY_CONFIG[intensity];
 
     const tasks = Array.from({ length: count }).map(async (_, i) => {
+        const sourceBlob = inputs[i % inputs.length];
+        const imagePart = await fileToGenerativePart(sourceBlob);
+        const ratio = await detectAspectRatio(sourceBlob);
+        
         const shotIndex = (startIndex + i) % VARIATION_SHOTS.length;
         const shot = VARIATION_SHOTS[shotIndex];
         
         const fullPrompt = `
-          OBJECTIVE: Generate a ${shot.type} for the product: ${auctionTitle}.
+          TASK: Composite this specific 3D object into a background.
           
-          STRICT PRODUCT INTEGRITY RULES:
-          1. DO NOT add any text, labels, nameplates, or stickers to the product.
-          2. DO NOT change the product's geometry, shape, or surface details.
-          3. DO NOT cut off any parts of the product. Keep original framing boundaries.
-          4. The product MUST look exactly like a real 3D printed object from the reference.
+          CRITICAL INSTRUCTIONS:
+          1. OBJECT LOCK: The object in the foreground is a specific 3D print render. **DO NOT CHANGE ITS GEOMETRY.**
+          2. DETAILS: The input image uses grey shading and dark lines to show details (logos, grooves). PRESERVE THESE DETAILS.
+          3. COLORIZATION: You may adjust the object's color slightly (e.g. to black or dark plastic) to match the scene, but DO NOT LOSE THE EMBOSSED DETAILS shown by the lines.
+          4. NO RE-DRAWING: Do not invent new shapes.
           
-          ENVIRONMENT (BACKGROUND) RULES:
-          1. TRANSFORM ONLY THE BACKGROUND AND LIGHTING.
-          2. THEME: ${userStylePrompt || config.baseTheme}
-          3. LIGHTING: ${config.lighting}
-          4. PERSPECTIVE: ${shot.desc}
-          5. VIBE: ${config.vibe}
-          
-          Technical: 8k photorealistic, professional e-commerce quality.
+          SCENE SETTINGS:
+          - Context: ${userStylePrompt || config.baseTheme}
+          - Specific Setting: ${shot.desc}
+          - Lighting: ${config.lighting} (Apply to background)
         `.trim();
 
         try {
@@ -180,7 +186,7 @@ export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, 
     const imagePart = await fileToGenerativePart(imageFile);
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
-        contents: { parts: [imagePart, { text: `Change color of the object from ${sourceColorHex} to ${targetColorHex}. Maintain texture and shading exactly.` }] },
+        contents: { parts: [imagePart, { text: `Change the color of this object to ${targetColorHex}. Keep all embossed details, logos, and shadows exactly as they are. Do not add text.` }] },
     });
     const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
     if (!part?.inlineData) throw new Error("Błąd.");

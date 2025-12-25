@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
@@ -13,8 +12,7 @@ import { exportToWooCommerce, exportToBaseLinker } from './services/exportServic
 import { CostAnalysis, CostAnalysisResult } from './components/CostAnalysis';
 import { CostSettingsModal } from './components/CostSettingsModal';
 import { PrintCostEstimator } from './components/PrintCostEstimator';
-
-declare const JSZip: any;
+import JSZip from 'jszip';
 
 type Status = 'idle' | 'loading' | 'success' | 'error';
 type ExportStatus = 'idle' | 'exporting' | 'success' | 'error';
@@ -63,6 +61,7 @@ export const App: React.FC = () => {
   const [isPackaging, setIsPackaging] = useState<boolean>(false);
   
   const [baseImageForAi, setBaseImageForAi] = useState<Blob | null>(null);
+  const [sourceRenderBlobs, setSourceRenderBlobs] = useState<Blob[]>([]);
 
   const [isExportModalOpen, setIsExportModalOpen] = useState<boolean>(false);
   const [exportPlatform, setExportPlatform] = useState<ExportPlatform | null>(null);
@@ -115,6 +114,7 @@ export const App: React.FC = () => {
       setWeight(null);
       setSelectedImages([]);
       setBaseImageForAi(null);
+      setSourceRenderBlobs([]);
       setError(null);
       setCostAnalysisStatus('idle');
       setCostAnalysisResult(null);
@@ -149,9 +149,19 @@ export const App: React.FC = () => {
             }
         }
         modelFileForContext = modelToProcess;
-        setLoadingMessage('Rendering modelu 3D...');
+        setLoadingMessage('Rendering 360° skanowania...');
+        // We now get 9 images (8 angles + 1 top)
         const { images, dimensions: modelDims, weight: modelW } = await generateImagesFromModel(modelToProcess);
-        modelRenders = images.map(f => ({ name: f.name, blob: f as Blob }));
+        
+        // INTELLIGENT SORTING:
+        // Sort renders by file size (Entropy).
+        // Larger PNG files = More visual information (Edges, Features, Lines).
+        // Smaller PNG files = Smooth surfaces (Back of objects).
+        const sortedRenders = [...images].sort((a, b) => b.size - a.size);
+        
+        // Take the top 4 most "interesting" angles
+        modelRenders = sortedRenders.slice(0, 4).map(f => ({ name: f.name, blob: f as Blob }));
+        
         setDimensions(modelDims);
         setWeight(modelW);
         if (modelW) calculatePrintCost(modelW, costSettings);
@@ -162,6 +172,22 @@ export const App: React.FC = () => {
       }
 
       setLoadingMessage('Analizowanie i generowanie opisu...');
+      
+      // Determine base images
+      let baseBlobs: Blob[] = [];
+      if (userImages.length > 0) {
+          baseBlobs = userImages.map(i => i.blob);
+      } else if (modelRenders.length > 0) {
+          baseBlobs = modelRenders.map(r => r.blob);
+      }
+      
+      setSourceRenderBlobs(baseBlobs);
+      
+      // Use the #1 most detailed image as the main reference for AI
+      const bestForWhiteBg = baseBlobs[0];
+      
+      setBaseImageForAi(bestForWhiteBg);
+
       const allCandidateFiles = [...userImages.map(i => new File([i.blob], i.name)), ...modelRenders.map(i => new File([i.blob], i.name))];
       const { auctionTitle: title, descriptionParts: parts, sku: gSku, ean: gEan, colors: gCols } = await generateAllegroDescription(allCandidateFiles, modelFileForContext, additionalInfo);
       
@@ -174,23 +200,25 @@ export const App: React.FC = () => {
       setLoadingMessage('Stylizacja zdjęć przez AI...');
       let finalGallery: { name: string; blob: Blob }[] = [];
 
-      const baseForAi = userImages.length > 0 ? userImages[0].blob : (modelRenders.length > 0 ? modelRenders[0].blob : null);
-      setBaseImageForAi(baseForAi);
-
-      if (baseForAi) {
-          const aiGensPromise = generateAdditionalImages(baseForAi, title, 3, imageStylePrompt, 0, backgroundIntensity);
+      if (baseBlobs.length > 0 && bestForWhiteBg) {
+          // 1. Generate Main White BG Shot
+          const whiteBgPromise = addWhiteBackground(bestForWhiteBg).catch(() => bestForWhiteBg);
           
-          const whiteBgPromise = (userImages.length > 0) 
-            ? addWhiteBackground(userImages[0].blob).catch(() => userImages[0].blob)
-            : Promise.resolve(modelRenders[0]?.blob);
+          // 2. Generate Lifestyle Shots 
+          // Use the top 3 distinct angles we found to create variation
+          const distinctAngles = baseBlobs.slice(0, 3);
+          const aiGensPromise = generateAdditionalImages(distinctAngles, title, 3, imageStylePrompt, 0, backgroundIntensity);
 
-          const [aiGens, whiteBg] = await Promise.all([aiGensPromise, whiteBgPromise]);
+          const [whiteBg, aiGens] = await Promise.all([whiteBgPromise, aiGensPromise]);
 
-          if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg });
+          if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg as Blob });
           finalGallery.push(...aiGens);
           
-          modelRenders.forEach(r => { if (finalGallery.length < 4) finalGallery.push(r); });
-          userImages.forEach(u => { if (finalGallery.length < 4) finalGallery.push(u); });
+          if (finalGallery.length < 4) {
+             modelRenders.forEach(r => {
+                 if (finalGallery.length < 4 && r.blob !== bestForWhiteBg) finalGallery.push(r);
+             });
+          }
       }
 
       setSelectedImages(finalGallery.slice(0, 4));
@@ -208,7 +236,8 @@ export const App: React.FC = () => {
               const newBlob = await addWhiteBackground(baseImageForAi);
               newImage = { name: 'main_product_refreshed.png', blob: newBlob };
           } else {
-              const results = await generateAdditionalImages(baseImageForAi, auctionTitle, 1, imageStylePrompt, index, backgroundIntensity);
+              const sources = sourceRenderBlobs.length > 0 ? sourceRenderBlobs : baseImageForAi;
+              const results = await generateAdditionalImages(sources, auctionTitle, 1, imageStylePrompt, index, backgroundIntensity);
               if (results.length > 0) newImage = results[0];
           }
           if (newImage) {
