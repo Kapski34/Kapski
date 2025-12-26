@@ -82,6 +82,13 @@ export const App: React.FC = () => {
   });
   const [printCost, setPrintCost] = useState<PrintCost | null>(null);
   
+  // CHECK FOR API KEY ON MOUNT
+  useEffect(() => {
+    if (!process.env.API_KEY) {
+        setError("BŁĄD KONFIGURACJI: Nie wykryto klucza API w aplikacji. Utwórz plik .env na komputerze, wpisz tam 'API_KEY=twój_klucz', wykonaj 'npm run build' i 'npx cap sync'.");
+    }
+  }, []);
+
   useEffect(() => {
     try {
         const savedSettings = localStorage.getItem('printCostSettings');
@@ -317,6 +324,16 @@ export const App: React.FC = () => {
     <div className="min-h-screen bg-slate-950 text-gray-100 flex flex-col items-center p-4 sm:p-6 lg:p-8">
       <div className="w-full max-w-5xl">
         <Header />
+        
+        {error && (
+            <div className="mt-4 p-4 bg-red-900/80 border border-red-500 rounded-lg text-red-100 shadow-xl animate-bounce">
+                <div className="flex items-center gap-3">
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                    <span className="font-bold">{error}</span>
+                </div>
+            </div>
+        )}
+
         <main className="relative mt-8 bg-slate-900 rounded-2xl shadow-2xl p-6 sm:p-8 border border-slate-800">
           <div className="absolute top-4 right-4">
              <button onClick={() => setIsCostSettingsModalOpen(true)} className="p-2 rounded-full text-gray-400 hover:text-cyan-300">
