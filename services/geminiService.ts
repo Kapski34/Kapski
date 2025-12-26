@@ -31,6 +31,7 @@ const detectAspectRatio = (blob: Blob): Promise<"1:1" | "3:4" | "4:3" | "9:16" |
       else if (ratio < 0.8) resolve("3:4");
       else resolve("1:1");
     };
+    img.onerror = () => resolve("1:1"); // Fallback
     img.src = URL.createObjectURL(blob);
   });
 };
@@ -80,28 +81,34 @@ export const generateAllegroDescription = async (
 
 export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
   if (!process.env.API_KEY) throw new Error("Brak klucza API.");
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const imagePart = await fileToGenerativePart(imageFile);
-  const ratio = await detectAspectRatio(imageFile);
-  
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: { parts: [imagePart, { text: `
-      TASK: Create a pure white background product shot for e-commerce.
-      
-      RULES:
-      1. PRESERVE THE OBJECT EXACTLY. Do not change its shape, color, or texture. The input image may have specific 3D print colors - keep them.
-      2. If the input image has transparency, fill the transparent area with #FFFFFF.
-      3. If the input has a background, replace it with #FFFFFF.
-      4. KEEP SHADOWS if they look natural, otherwise generate a soft contact shadow.
-      5. Output high resolution, photorealistic image.
-    `.trim() }] },
-    config: { imageConfig: { aspectRatio: ratio } }
-  });
-  const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-  if (!part?.inlineData) throw new Error("AI nie zwróciło obrazu.");
-  const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-  return await res.blob();
+  console.log("Generowanie białego tła...");
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const imagePart = await fileToGenerativePart(imageFile);
+    const ratio = await detectAspectRatio(imageFile);
+    
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.5-flash-image',
+      contents: { parts: [imagePart, { text: `
+        TASK: Create a pure white background product shot for e-commerce.
+        
+        RULES:
+        1. PRESERVE THE OBJECT EXACTLY. Do not change its shape, color, or texture. The input image may have specific 3D print colors - keep them.
+        2. If the input image has transparency, fill the transparent area with #FFFFFF.
+        3. If the input has a background, replace it with #FFFFFF.
+        4. KEEP SHADOWS if they look natural, otherwise generate a soft contact shadow.
+        5. Output high resolution, photorealistic image.
+      `.trim() }] },
+      config: { imageConfig: { aspectRatio: ratio } }
+    });
+    const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+    if (!part?.inlineData) throw new Error("AI nie zwróciło obrazu.");
+    const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+    return await res.blob();
+  } catch (error) {
+    console.error("Błąd w addWhiteBackground:", error);
+    throw error;
+  }
 };
 
 const VARIATION_SHOTS = [
@@ -135,17 +142,23 @@ export const generateAdditionalImages = async (
   intensity: BackgroundIntensity = 'normal'
 ): Promise<{ name: string; blob: Blob }[]> => {
     if (!process.env.API_KEY || count <= 0) return [];
+    console.log(`Generowanie ${count} dodatkowych zdjęć...`);
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     // Normalize input to array
     const inputs = Array.isArray(sourceImages) ? sourceImages : [sourceImages];
-    const config = INTENSITY_CONFIG[intensity];
+    if (inputs.length === 0) return [];
 
-    const tasks = Array.from({ length: count }).map(async (_, i) => {
+    const config = INTENSITY_CONFIG[intensity];
+    const results: { name: string; blob: Blob }[] = [];
+
+    // EXECUTE SEQUENTIALLY to avoid Rate Limits (429) on Vercel/Free Tier
+    for (let i = 0; i < count; i++) {
         const sourceBlob = inputs[i % inputs.length];
-        const imagePart = await fileToGenerativePart(sourceBlob);
-        const ratio = await detectAspectRatio(sourceBlob);
         
+        // Skip invalid blobs
+        if (!sourceBlob) continue;
+
         const shotIndex = (startIndex + i) % VARIATION_SHOTS.length;
         const shot = VARIATION_SHOTS[shotIndex];
         
@@ -165,6 +178,9 @@ export const generateAdditionalImages = async (
         `.trim();
 
         try {
+            const imagePart = await fileToGenerativePart(sourceBlob);
+            const ratio = await detectAspectRatio(sourceBlob);
+
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash-image',
                 contents: { parts: [imagePart, { text: fullPrompt }] },
@@ -174,14 +190,15 @@ export const generateAdditionalImages = async (
             if (part?.inlineData) {
                 const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
                 const blob = await res.blob();
-                return { name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob };
+                results.push({ name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob });
             }
-        } catch (error) { console.error(error); }
-        return null;
-    });
+        } catch (error) { 
+            console.error(`Błąd generowania zdjęcia ${i+1}/${count}:`, error); 
+            // We continue to the next image even if one fails
+        }
+    }
 
-    const results = await Promise.all(tasks);
-    return results.filter((r): r is { name: string; blob: Blob } => r !== null);
+    return results;
 };
 
 export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, targetColorHex: string): Promise<Blob> => {
