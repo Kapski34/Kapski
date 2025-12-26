@@ -201,17 +201,23 @@ export const App: React.FC = () => {
       let finalGallery: { name: string; blob: Blob }[] = [];
 
       if (baseBlobs.length > 0 && bestForWhiteBg) {
-          // 1. Generate Main White BG Shot
-          const whiteBgPromise = addWhiteBackground(bestForWhiteBg).catch(() => bestForWhiteBg);
+          // STRICT SEQUENTIAL EXECUTION to prevent 429 Errors
           
-          // 2. Generate Lifestyle Shots 
-          // Use the top 3 distinct angles we found to create variation
+          // 1. Generate Main White BG Shot
+          let whiteBg: Blob | null = null;
+          try {
+             whiteBg = await addWhiteBackground(bestForWhiteBg);
+          } catch (e) {
+             console.warn("Błąd białego tła (fallback):", e);
+             whiteBg = bestForWhiteBg; // Fallback to raw render
+          }
+
+          if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg });
+
+          // 2. Generate Lifestyle Shots (AFTER white BG is done)
           const distinctAngles = baseBlobs.slice(0, 3);
-          const aiGensPromise = generateAdditionalImages(distinctAngles, title, 3, imageStylePrompt, 0, backgroundIntensity);
-
-          const [whiteBg, aiGens] = await Promise.all([whiteBgPromise, aiGensPromise]);
-
-          if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg as Blob });
+          const aiGens = await generateAdditionalImages(distinctAngles, title, 3, imageStylePrompt, 0, backgroundIntensity);
+          
           finalGallery.push(...aiGens);
           
           if (finalGallery.length < 4) {

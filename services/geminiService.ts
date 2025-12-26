@@ -1,6 +1,27 @@
 import { GoogleGenAI, Type } from "@google/genai";
 import { BackgroundIntensity } from "../App";
 
+// Helper for delays
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Robust retry wrapper for API calls
+async function retryOperation<T>(operation: () => Promise<T>, delayMs: number = 3000, retries: number = 3): Promise<T> {
+    try {
+        return await operation();
+    } catch (error: any) {
+        // Check for Rate Limit (429) or Quota Exceeded
+        const isRateLimit = error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('Quota') || error?.message?.includes('RESOURCE_EXHAUSTED');
+        
+        if (retries > 0 && isRateLimit) {
+            console.warn(`Rate limit hit (429). Retrying in ${delayMs}ms... (${retries} retries left)`);
+            await delay(delayMs);
+            // Exponential backoff
+            return retryOperation(operation, delayMs * 1.5, retries - 1);
+        }
+        throw error;
+    }
+}
+
 const parseJsonResponse = (responseText: string) => {
   const jsonStartIndex = responseText.indexOf('{');
   if (jsonStartIndex === -1) throw new Error(`Błąd odpowiedzi.`);
@@ -42,47 +63,51 @@ export const generateAllegroDescription = async (
   additionalInfo: string
 ): Promise<{ auctionTitle: string; descriptionParts: string[]; selectedImageNames: string[], sku: string; ean: string; colors: string[] }> => {
   if (!process.env.API_KEY) throw new Error("Brak klucza API.");
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const modelFileName = modelFile?.name || null;
-  const textPrompt = `Jesteś copywriterem e-commerce. Stwórz wysokokonwersyjny opis na Allegro (4 akapity: Haczyk, Technologia, Styl, CTA) na podstawie zdjęć i nazwy pliku "${modelFileName}". Info: ${additionalInfo}. Zwróć JSON {auction_title, description_parts, sku, ean, colors}.`;
-  const imageContentParts = await Promise.all(imageFiles.slice(0, 3).map(file => fileToGenerativePart(file)));
   
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: { parts: [...imageContentParts, { text: textPrompt }] },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          auction_title: { type: Type.STRING },
-          description_parts: { type: Type.ARRAY, items: { type: Type.STRING } },
-          sku: { type: Type.STRING },
-          ean: { type: Type.STRING },
-          colors: { type: Type.ARRAY, items: { type: Type.STRING } },
+  return retryOperation(async () => {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const modelFileName = modelFile?.name || null;
+      const textPrompt = `Jesteś copywriterem e-commerce. Stwórz wysokokonwersyjny opis na Allegro (4 akapity: Haczyk, Technologia, Styl, CTA) na podstawie zdjęć i nazwy pliku "${modelFileName}". Info: ${additionalInfo}. Zwróć JSON {auction_title, description_parts, sku, ean, colors}.`;
+      const imageContentParts = await Promise.all(imageFiles.slice(0, 3).map(file => fileToGenerativePart(file)));
+      
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: { parts: [...imageContentParts, { text: textPrompt }] },
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              auction_title: { type: Type.STRING },
+              description_parts: { type: Type.ARRAY, items: { type: Type.STRING } },
+              sku: { type: Type.STRING },
+              ean: { type: Type.STRING },
+              colors: { type: Type.ARRAY, items: { type: Type.STRING } },
+            },
+          },
         },
-      },
-    },
+      });
+      
+      const responseText = response.text;
+      if (!responseText) throw new Error("Błąd generowania: AI nie zwróciło tekstu.");
+      
+      const jsonResponse = parseJsonResponse(responseText);
+      return {
+        auctionTitle: jsonResponse.auction_title,
+        descriptionParts: jsonResponse.description_parts,
+        selectedImageNames: [],
+        sku: jsonResponse.sku || '',
+        ean: jsonResponse.ean || '',
+        colors: jsonResponse.colors || [],
+      };
   });
-  
-  const responseText = response.text;
-  if (!responseText) throw new Error("Błąd generowania: AI nie zwróciło tekstu.");
-  
-  const jsonResponse = parseJsonResponse(responseText);
-  return {
-    auctionTitle: jsonResponse.auction_title,
-    descriptionParts: jsonResponse.description_parts,
-    selectedImageNames: [],
-    sku: jsonResponse.sku || '',
-    ean: jsonResponse.ean || '',
-    colors: jsonResponse.colors || [],
-  };
 };
 
 export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
   if (!process.env.API_KEY) throw new Error("Brak klucza API.");
   console.log("Generowanie białego tła...");
-  try {
+  
+  return retryOperation(async () => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const imagePart = await fileToGenerativePart(imageFile);
     const ratio = await detectAspectRatio(imageFile);
@@ -105,10 +130,7 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
     if (!part?.inlineData) throw new Error("AI nie zwróciło obrazu.");
     const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
     return await res.blob();
-  } catch (error) {
-    console.error("Błąd w addWhiteBackground:", error);
-    throw error;
-  }
+  }, 4000); // 4s delay for retry
 };
 
 const VARIATION_SHOTS = [
@@ -145,18 +167,15 @@ export const generateAdditionalImages = async (
     console.log(`Generowanie ${count} dodatkowych zdjęć...`);
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
-    // Normalize input to array
     const inputs = Array.isArray(sourceImages) ? sourceImages : [sourceImages];
     if (inputs.length === 0) return [];
 
     const config = INTENSITY_CONFIG[intensity];
     const results: { name: string; blob: Blob }[] = [];
 
-    // EXECUTE SEQUENTIALLY to avoid Rate Limits (429) on Vercel/Free Tier
+    // EXECUTE SEQUENTIALLY with Retry Logic
     for (let i = 0; i < count; i++) {
         const sourceBlob = inputs[i % inputs.length];
-        
-        // Skip invalid blobs
         if (!sourceBlob) continue;
 
         const shotIndex = (startIndex + i) % VARIATION_SHOTS.length;
@@ -178,23 +197,30 @@ export const generateAdditionalImages = async (
         `.trim();
 
         try {
-            const imagePart = await fileToGenerativePart(sourceBlob);
-            const ratio = await detectAspectRatio(sourceBlob);
+            // Intentional delay between iterations to avoid 429
+            if (i > 0) await delay(3500);
 
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: { parts: [imagePart, { text: fullPrompt }] },
-                config: { imageConfig: { aspectRatio: ratio } }
-            });
-            const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-            if (part?.inlineData) {
-                const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-                const blob = await res.blob();
-                results.push({ name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob });
-            }
+            const resultBlob = await retryOperation(async () => {
+                const imagePart = await fileToGenerativePart(sourceBlob);
+                const ratio = await detectAspectRatio(sourceBlob);
+
+                const response = await ai.models.generateContent({
+                    model: 'gemini-2.5-flash-image',
+                    contents: { parts: [imagePart, { text: fullPrompt }] },
+                    config: { imageConfig: { aspectRatio: ratio } }
+                });
+                const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+                if (part?.inlineData) {
+                    const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+                    return await res.blob();
+                }
+                throw new Error("No image data returned");
+            }, 5000); // 5s wait for retry
+
+            results.push({ name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob: resultBlob });
+            
         } catch (error) { 
             console.error(`Błąd generowania zdjęcia ${i+1}/${count}:`, error); 
-            // We continue to the next image even if one fails
         }
     }
 
@@ -203,32 +229,36 @@ export const generateAdditionalImages = async (
 
 export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, targetColorHex: string): Promise<Blob> => {
     if (!process.env.API_KEY) throw new Error("Brak klucza API.");
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const imagePart = await fileToGenerativePart(imageFile);
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: { parts: [imagePart, { text: `Change the color of this object to ${targetColorHex}. Keep all embossed details, logos, and shadows exactly as they are. Do not add text. High resolution.` }] },
+    
+    return retryOperation(async () => {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const imagePart = await fileToGenerativePart(imageFile);
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: [imagePart, { text: `Change the color of this object to ${targetColorHex}. Keep all embossed details, logos, and shadows exactly as they are. Do not add text. High resolution.` }] },
+        });
+        const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        if (!part?.inlineData) throw new Error("Błąd.");
+        const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+        return await res.blob();
     });
-    const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-    if (!part?.inlineData) throw new Error("Błąd.");
-    const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-    return await res.blob();
 };
 
 export const analyzePricing = async (imageFile: Blob, auctionTitle: string): Promise<{ products: { productTitle: string; pricePln: string; productUrl: string; }[] }> => {
   if (!process.env.API_KEY) throw new Error("Brak klucza.");
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const imagePart = await fileToGenerativePart(imageFile);
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: { parts: [imagePart, { text: `Search Google for current prices of: ${auctionTitle}. Return JSON {products: [{product_title, price_pln, product_url}]}.` }] },
-    config: { tools: [{googleSearch: {}}] },
+  
+  return retryOperation(async () => {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const imagePart = await fileToGenerativePart(imageFile);
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: { parts: [imagePart, { text: `Search Google for current prices of: ${auctionTitle}. Return JSON {products: [{product_title, price_pln, product_url}]}.` }] },
+        config: { tools: [{googleSearch: {}}] },
+      });
+      const responseText = response.text;
+      if (!responseText) throw new Error("Brak odpowiedzi tekstowej.");
+      
+      const json = parseJsonResponse(responseText);
+      return { products: (json.products || []).map((p:any) => ({ productTitle: p.product_title, pricePln: p.price_pln, productUrl: p.product_url })) };
   });
-  try {
-    const responseText = response.text;
-    if (!responseText) throw new Error("Brak odpowiedzi tekstowej.");
-    
-    const json = parseJsonResponse(responseText);
-    return { products: (json.products || []).map((p:any) => ({ productTitle: p.product_title, pricePln: p.price_pln, productUrl: p.product_url })) };
-  } catch (e) { return { products: [] }; }
 };

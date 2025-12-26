@@ -53,48 +53,42 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
             mesh.geometry.computeVertexNormals();
         }
 
-        // --- CRITICAL COLOR FIX ---
-        // Check if the geometry has vertex colors (common in 3MF/Color 3D prints)
         const hasVertexColors = mesh.geometry && mesh.geometry.hasAttribute('color');
 
         if (!mesh.material) {
-            // No material? Use default.
             mesh.material = defaultMaterial.clone();
             materialsToDispose.push(mesh.material);
         } else {
-            // FIX: Handle Multi-Material Meshes correctly.
-            // Previously, we only took material[0], which turned multi-colored objects into single-colored ones.
+            // Robust material conversion to StandardMaterial (PBR)
             const oldMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
             
             const newMaterials = oldMaterials.map(oldMat => {
+                // Check if we can just reuse color from the old material
+                const oldColor = (oldMat as any).color || new THREE.Color(0xffffff);
+                const oldMap = (oldMat as any).map || null;
+                const oldOpacity = (oldMat as any).opacity ?? 1;
+                const oldTransparent = (oldMat as any).transparent ?? false;
+
                 const newMat = new THREE.MeshStandardMaterial({
-                    // Preserve Color
-                    color: (oldMat as any).color || 0xffffff,
-                    // Preserve Texture Map
-                    map: (oldMat as any).map || null,
-                    // FORCE Vertex Colors if geometry has them
-                    vertexColors: hasVertexColors,
-                    // Make it look like high-quality 3D print plastic
+                    color: oldColor,
+                    map: oldMap,
+                    vertexColors: hasVertexColors, // Critical for 3MF colors
                     roughness: 0.6, 
                     metalness: 0.1,
                     side: THREE.DoubleSide,
+                    transparent: oldTransparent,
+                    opacity: oldOpacity
                 });
 
-                // If the old material had specific settings, try to respect them slightly
-                if ((oldMat as any).transparent) newMat.transparent = true;
-                if ((oldMat as any).opacity) newMat.opacity = (oldMat as any).opacity;
-                
                 materialsToDispose.push(newMat);
                 return newMat;
             });
 
-            // Assign back as array if it was array, or single if it was single
             mesh.material = Array.isArray(mesh.material) ? newMaterials : newMaterials[0];
         }
 
         // Add subtle edges for better shape definition
         if (mesh.geometry) {
-             // Angle threshold 25 to only show sharp edges
             const edges = new THREE.EdgesGeometry(mesh.geometry, 25); 
             const line = new THREE.LineSegments(edges, lineMaterial);
             mesh.add(line);
@@ -143,25 +137,21 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     scene.add(camera);
 
     // --- LIGHTING (Studio Setup) ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); // Slightly brighter ambient
     scene.add(ambientLight);
 
-    // Key Light (Main Shadow Caster)
     const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
     mainLight.position.set(5, 12, 8);
     mainLight.castShadow = true;
-    mainLight.shadow.mapSize.width = 4096;
-    mainLight.shadow.mapSize.height = 4096;
+    mainLight.shadow.mapSize.width = 2048; // Optimized shadow map
+    mainLight.shadow.mapSize.height = 2048;
     mainLight.shadow.bias = -0.0001;
-    mainLight.shadow.radius = 2; // Softer shadows
     scene.add(mainLight);
 
-    // Fill Light
     const fillLight = new THREE.DirectionalLight(0xeef2ff, 0.6);
     fillLight.position.set(-8, 2, 5);
     scene.add(fillLight);
     
-    // Rim Light (Back)
     const backLight = new THREE.DirectionalLight(0xffffff, 0.6);
     backLight.position.set(0, 8, -10);
     scene.add(backLight);
@@ -173,9 +163,7 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     const center = box.getCenter(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);
     
-    // Reset position to origin
     objectToFrame.position.sub(center);
-    // Lift so it sits perfectly ON the ground (y=0)
     objectToFrame.position.y += size.y / 2;
     
     scene.add(objectToFrame);
@@ -201,7 +189,7 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     const renderer = new THREE.WebGLRenderer({ 
         antialias: true, 
         preserveDrawingBuffer: true, 
-        alpha: true, // TRANSPARENT BACKGROUND
+        alpha: true, 
         powerPreference: "high-performance"
     });
     
@@ -214,7 +202,6 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     // --- CAPTURING VIEWS ---
     const distance = maxDim * 3.5;
     const lookAtTarget = new THREE.Vector3(0, size.y / 2, 0);
-
     const views: { name: string; pos: THREE.Vector3; up: THREE.Vector3 }[] = [];
 
     const addView = (name: string, x: number, y: number, z: number, upX: number, upY: number, upZ: number) => {
