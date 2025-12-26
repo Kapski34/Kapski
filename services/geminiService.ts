@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { BackgroundIntensity } from "../App";
 
@@ -64,7 +63,11 @@ export const generateAllegroDescription = async (
       },
     },
   });
-  const jsonResponse = parseJsonResponse(response.text);
+  
+  const responseText = response.text;
+  if (!responseText) throw new Error("Błąd generowania: AI nie zwróciło tekstu.");
+  
+  const jsonResponse = parseJsonResponse(responseText);
   return {
     auctionTitle: jsonResponse.auction_title,
     descriptionParts: jsonResponse.description_parts,
@@ -75,7 +78,7 @@ export const generateAllegroDescription = async (
   };
 };
 
-export const addWhiteBackground = async (imageFile: Blob, context: string = "Product"): Promise<Blob> => {
+export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
   if (!process.env.API_KEY) throw new Error("Brak klucza API.");
   const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
   const imagePart = await fileToGenerativePart(imageFile);
@@ -84,16 +87,14 @@ export const addWhiteBackground = async (imageFile: Blob, context: string = "Pro
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash-image',
     contents: { parts: [imagePart, { text: `
-      TASK: Enhance this image of a "${context}" into a FINAL PRODUCT PHOTO.
+      TASK: Create a pure white background product shot for e-commerce.
       
-      INSTRUCTIONS:
-      1. BACKGROUND: Pure White (#FFFFFF).
-      2. GEOMETRY: LOCK THE SHAPE. Do not change the outline/silhouette at all.
-      3. COLOR & MATERIAL: 
-         - IF the input object has clear colors (e.g. brown, red, blue), KEEP THEM EXACTLY AS IS. Do not change the object's color.
-         - ONLY IF the input is a solid grey untextured 3D render, then apply realistic materials (Metal/Plastic/Resin).
-      4. LIGHTING: Studio lighting, soft shadows.
-      5. NEGATIVE: NO TEXT, NO LABELS, NO SIGNS, NO WATERMARKS, NO STANDS WITH TEXT.
+      RULES:
+      1. PRESERVE THE OBJECT EXACTLY. Do not change its shape, color, or texture. The input image may have specific 3D print colors - keep them.
+      2. If the input image has transparency, fill the transparent area with #FFFFFF.
+      3. If the input has a background, replace it with #FFFFFF.
+      4. KEEP SHADOWS if they look natural, otherwise generate a soft contact shadow.
+      5. Output high resolution, photorealistic image.
     `.trim() }] },
     config: { imageConfig: { aspectRatio: ratio } }
   });
@@ -104,35 +105,26 @@ export const addWhiteBackground = async (imageFile: Blob, context: string = "Pro
 };
 
 const VARIATION_SHOTS = [
-  // Shot 1: Office/Desk (Lifestyle)
-  { desc: "Setting: Premium wooden desk. Lighting: Cinematic natural daylight. Camera: Eye-level product shot." },
-  
-  // Shot 2: Dark Studio
-  { desc: "Setting: Dark elegant studio surface. Lighting: Dramatic rim lighting (blue/orange). Camera: Slightly low angle hero shot." },
-  
-  // Shot 3: Interior/Living Room
-  { desc: "Setting: Modern bright living room coffee table. Lighting: Soft ambient cozy light. Camera: 3/4 angle view." },
-  
-  // Shot 4: Macro/Detail
-  { desc: "Setting: Neutral professional surface. Lighting: Softbox studio light. Camera: Macro close-up, shallow depth of field." }
+  { desc: "Placed on a modern wooden desk. Soft window lighting." },
+  { desc: "Minimalist concrete surface. High-end tech vibe." },
+  { desc: "Held in a hand (blurred background). Lifestyle context." },
+  { desc: "Creative colorful studio background." }
 ];
 
 const INTENSITY_CONFIG = {
   calm: {
-    baseTheme: "Clean, minimalist.",
+    baseTheme: "Clean, minimalist, professional.",
     lighting: "Soft, diffused."
   },
   normal: {
-    baseTheme: "Modern, realistic.",
-    lighting: "Cinematic, volumetric."
+    baseTheme: "Modern, daily life context.",
+    lighting: "Natural."
   },
   crazy: {
     baseTheme: "Dramatic, high contrast, artistic.",
-    lighting: "Dynamic, colorful."
+    lighting: "Cinematic."
   }
 };
-
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const generateAdditionalImages = async (
   sourceImages: Blob | Blob[],
@@ -149,10 +141,7 @@ export const generateAdditionalImages = async (
     const inputs = Array.isArray(sourceImages) ? sourceImages : [sourceImages];
     const config = INTENSITY_CONFIG[intensity];
 
-    const results: { name: string; blob: Blob }[] = [];
-
-    // EXECUTE SEQUENTIALLY TO AVOID 429 RATE LIMITS
-    for (let i = 0; i < count; i++) {
+    const tasks = Array.from({ length: count }).map(async (_, i) => {
         const sourceBlob = inputs[i % inputs.length];
         const imagePart = await fileToGenerativePart(sourceBlob);
         const ratio = await detectAspectRatio(sourceBlob);
@@ -160,36 +149,19 @@ export const generateAdditionalImages = async (
         const shotIndex = (startIndex + i) % VARIATION_SHOTS.length;
         const shot = VARIATION_SHOTS[shotIndex];
         
-        let sceneDescription = "";
-        
-        if (userStylePrompt && userStylePrompt.length > 2) {
-            sceneDescription = `
-                THEME: ${userStylePrompt}.
-                COMPOSITION: Integrate the product into this theme, but strictly follow this camera setup: ${shot.desc}
-            `;
-        } else {
-            sceneDescription = `
-                THEME: ${config.baseTheme}
-                SCENARIO: ${shot.desc}
-            `;
-        }
-
         const fullPrompt = `
-          TASK: Create a photorealistic product shot of: ${auctionTitle}.
+          TASK: Place this 3D printed object into a realistic scene.
           
-          RULES:
-          1. GEOMETRY (STRICT): The silhouette/shape must NOT change.
-          2. COLOR (CRITICAL):
-             - IF the input object is COLORED (e.g. brown reindeer, red handle): YOU MUST PRESERVE THE ORIGINAL OBJECT COLORS. Do not camouflage it.
-             - IF the input is GREY CLAY: Apply realistic materials.
-          3. CLEANLINESS: NO TEXT, NO LABELS, NO SIGNS, NO PRICE TAGS, NO WATERMARKS. The surface/background must be clean.
+          STRICT GEOMETRY LOCK:
+          - The input image contains the EXACT product. DO NOT CHANGE ITS SHAPE OR DETAILS.
+          - If the input is a 3D render with specific colors, PRESERVE THEM.
           
           SCENE:
-          ${sceneDescription}
+          - Context: ${userStylePrompt || config.baseTheme}
+          - Specific Setting: ${shot.desc}
+          - Lighting: ${config.lighting} (match product lighting to background)
           
-          Lighting Style: ${config.lighting}
-          Quality: 8k, Unreal Engine 5 Render, highly detailed.
-          Variation Seed: ${Date.now() + i}
+          QUALITY: 8k resolution, highly detailed, photorealistic.
         `.trim();
 
         try {
@@ -202,88 +174,15 @@ export const generateAdditionalImages = async (
             if (part?.inlineData) {
                 const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
                 const blob = await res.blob();
-                results.push({ name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob });
+                return { name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob };
             }
-        } catch (error) { 
-            console.error("Gemini Gen Error:", error); 
-            // Continue to next image even if one fails
-        }
-        
-        // Add 2s delay between requests to respect rate limits
-        if (i < count - 1) await delay(2000);
-    }
+        } catch (error) { console.error(error); }
+        return null;
+    });
 
-    return results;
+    const results = await Promise.all(tasks);
+    return results.filter((r): r is { name: string; blob: Blob } => r !== null);
 };
-
-// --- NEW FUNCTION FOR VIRTUAL STUDIO ---
-export const generateStudioProImages = async (
-    sourceImage: Blob,
-    stylePrompt: string,
-    count: number
-): Promise<{ name: string; blob: Blob }[]> => {
-    if (!process.env.API_KEY || count <= 0) return [];
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const imagePart = await fileToGenerativePart(sourceImage);
-    const ratio = await detectAspectRatio(sourceImage);
-
-    const results: { name: string; blob: Blob }[] = [];
-
-    // EXECUTE SEQUENTIALLY TO AVOID 429 RATE LIMITS
-    for (let i = 0; i < count; i++) {
-        const angleStrategies = [
-            "CAMERA: 3/4 Isometric View (approx 30 degrees elevation).",
-            "CAMERA: Dynamic Low Angle (Hero Shot).",
-            "CAMERA: Side Profile 45 degrees."
-        ];
-        
-        const selectedAngle = angleStrategies[i % angleStrategies.length];
-
-        const prompt = `
-            Professional product photography.
-            TASK: Place the product in the input image into a new environment.
-            STYLE/THEME: ${stylePrompt}
-            
-            ${selectedAngle}
-            
-            REQUIREMENTS:
-            1. IDENTITY: Preserve the core visual features (COLORS, logos, texture) of the product. If the input is brown, the output must be brown.
-            2. PERSPECTIVE: Adapt the object perspective to match the requested camera angle.
-            3. LIGHTING: Use professional studio lighting.
-            4. NEGATIVE: DO NOT GENERATE ANY TEXT, LABELS, SIGNS, OR PLACARDS.
-            
-            Variation seed: ${Date.now() + i}
-        `;
-
-        try {
-            const response = await ai.models.generateContent({
-                model: 'gemini-2.5-flash-image',
-                contents: { parts: [imagePart, { text: prompt }] },
-                config: { imageConfig: { aspectRatio: ratio } }
-            });
-            const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-            if (part?.inlineData) {
-                const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-                const blob = await res.blob();
-                results.push({ name: `studio_pro_${i + 1}_${Date.now()}.png`, blob });
-            }
-        } catch (e) { 
-            console.error("Studio gen error", e); 
-            // If quota exhausted, we might want to throw to inform UI, or just return partial results.
-            // Throwing makes more sense if 0 images are generated.
-            if ((e as any)?.status === 429 || (e as any)?.message?.includes('429')) {
-                // Wait longer if we hit rate limit inside loop, although typically the API throws immediately
-                await delay(5000);
-            }
-        }
-        
-        // Add 2s delay between requests
-        if (i < count - 1) await delay(2000);
-    }
-
-    return results;
-};
-
 
 export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, targetColorHex: string): Promise<Blob> => {
     if (!process.env.API_KEY) throw new Error("Brak klucza API.");
@@ -291,7 +190,7 @@ export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, 
     const imagePart = await fileToGenerativePart(imageFile);
     const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
-        contents: { parts: [imagePart, { text: `Change the color of this object to ${targetColorHex}. Keep all embossed details, logos, and shadows exactly as they are. Do not add text.` }] },
+        contents: { parts: [imagePart, { text: `Change the color of this object to ${targetColorHex}. Keep all embossed details, logos, and shadows exactly as they are. Do not add text. High resolution.` }] },
     });
     const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
     if (!part?.inlineData) throw new Error("Błąd.");
@@ -309,7 +208,10 @@ export const analyzePricing = async (imageFile: Blob, auctionTitle: string): Pro
     config: { tools: [{googleSearch: {}}] },
   });
   try {
-    const json = parseJsonResponse(response.text);
+    const responseText = response.text;
+    if (!responseText) throw new Error("Brak odpowiedzi tekstowej.");
+    
+    const json = parseJsonResponse(responseText);
     return { products: (json.products || []).map((p:any) => ({ productTitle: p.product_title, pricePln: p.price_pln, productUrl: p.product_url })) };
   } catch (e) { return { products: [] }; }
 };
