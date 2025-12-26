@@ -24,11 +24,12 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     const geometriesToDispose: THREE.BufferGeometry[] = [];
     const materialsToDispose: THREE.Material[] = [];
     
-    // Default Material (Fallback for uncolored STLs) - Light Grey Satin
+    // Default Material (Fallback) - Light Grey Satin
     const defaultMaterial = new THREE.MeshStandardMaterial({
         color: 0xE0E0E0,
         roughness: 0.5,
         metalness: 0.1,
+        side: THREE.DoubleSide
     });
     materialsToDispose.push(defaultMaterial);
     
@@ -47,37 +48,48 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         mesh.castShadow = true;
         mesh.receiveShadow = true;
 
-        // CRITICAL: Handle Materials correctly
+        // Ensure geometry normals exist for proper lighting
+        if (mesh.geometry && !mesh.geometry.attributes.normal) {
+            mesh.geometry.computeVertexNormals();
+        }
+
+        // --- CRITICAL COLOR FIX ---
+        // Check if the geometry has vertex colors (common in 3MF/Color 3D prints)
+        const hasVertexColors = mesh.geometry && mesh.geometry.hasAttribute('color');
+
         if (!mesh.material) {
             // No material? Use default.
-            mesh.material = defaultMaterial;
+            mesh.material = defaultMaterial.clone();
+            materialsToDispose.push(mesh.material);
         } else {
-            // Has material? Upgrade it to Standard if it's Basic, preserving color.
-            if (mesh.material instanceof THREE.MeshBasicMaterial) {
-                const oldMat = mesh.material;
+            // FIX: Handle Multi-Material Meshes correctly.
+            // Previously, we only took material[0], which turned multi-colored objects into single-colored ones.
+            const oldMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+            
+            const newMaterials = oldMaterials.map(oldMat => {
                 const newMat = new THREE.MeshStandardMaterial({
-                    color: oldMat.color,
-                    map: oldMat.map,
-                    vertexColors: (oldMat as any).vertexColors,
-                    roughness: 0.5,
+                    // Preserve Color
+                    color: (oldMat as any).color || 0xffffff,
+                    // Preserve Texture Map
+                    map: (oldMat as any).map || null,
+                    // FORCE Vertex Colors if geometry has them
+                    vertexColors: hasVertexColors,
+                    // Make it look like high-quality 3D print plastic
+                    roughness: 0.6, 
                     metalness: 0.1,
-                    side: THREE.DoubleSide
+                    side: THREE.DoubleSide,
                 });
-                mesh.material = newMat;
+
+                // If the old material had specific settings, try to respect them slightly
+                if ((oldMat as any).transparent) newMat.transparent = true;
+                if ((oldMat as any).opacity) newMat.opacity = (oldMat as any).opacity;
+                
                 materialsToDispose.push(newMat);
-            } else if (mesh.material instanceof THREE.MeshStandardMaterial || mesh.material instanceof THREE.MeshPhongMaterial) {
-                // Keep existing advanced materials but ensure sides
-                mesh.material.side = THREE.DoubleSide;
-                mesh.material.shadowSide = THREE.DoubleSide;
-            }
-        }
-        
-        // Handle Multi-materials
-        if (Array.isArray(mesh.material)) {
-            mesh.material.forEach(m => {
-                m.side = THREE.DoubleSide;
-                m.shadowSide = THREE.DoubleSide;
+                return newMat;
             });
+
+            // Assign back as array if it was array, or single if it was single
+            mesh.material = Array.isArray(mesh.material) ? newMaterials : newMaterials[0];
         }
 
         // Add subtle edges for better shape definition
@@ -95,7 +107,7 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         const loader = new ThreeMFLoader();
         objectToFrame = loader.parse(fileBuffer);
         
-        // Calculate size immediately to normalize
+        // Calculate size immediately
         const box = new THREE.Box3().setFromObject(objectToFrame);
         const size = new THREE.Vector3();
         box.getSize(size);
@@ -119,38 +131,38 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         geometry.boundingBox!.getSize(size);
         dimensions = { x: size.x, y: size.y, z: size.z };
         
-        const mesh = new THREE.Mesh(geometry, defaultMaterial);
+        const mesh = new THREE.Mesh(geometry, defaultMaterial.clone());
         processMesh(mesh);
         objectToFrame = mesh;
     }
     
     // --- SCENE SETUP ---
     const scene = new THREE.Scene();
-    // Intentionally NO background color set -> produces transparent background
     
     const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 10000); 
     scene.add(camera);
 
     // --- LIGHTING (Studio Setup) ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
     scene.add(ambientLight);
 
     // Key Light (Main Shadow Caster)
     const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
     mainLight.position.set(5, 12, 8);
     mainLight.castShadow = true;
-    mainLight.shadow.mapSize.width = 4096; // Ultra sharp shadows
+    mainLight.shadow.mapSize.width = 4096;
     mainLight.shadow.mapSize.height = 4096;
     mainLight.shadow.bias = -0.0001;
+    mainLight.shadow.radius = 2; // Softer shadows
     scene.add(mainLight);
 
     // Fill Light
-    const fillLight = new THREE.DirectionalLight(0xeef2ff, 0.5);
+    const fillLight = new THREE.DirectionalLight(0xeef2ff, 0.6);
     fillLight.position.set(-8, 2, 5);
     scene.add(fillLight);
     
     // Rim Light (Back)
-    const backLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    const backLight = new THREE.DirectionalLight(0xffffff, 0.6);
     backLight.position.set(0, 8, -10);
     scene.add(backLight);
 
@@ -169,12 +181,11 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     scene.add(objectToFrame);
 
     // --- SHADOW CATCHER ---
-    // Invisible plane that only receives shadows
     const planeGeometry = new THREE.PlaneGeometry(2000, 2000);
     planeGeometry.rotateX(-Math.PI / 2);
     
     const planeMaterial = new THREE.ShadowMaterial({
-        opacity: 0.15, // Subtle shadow
+        opacity: 0.15,
         color: 0x000000
     });
     
@@ -195,15 +206,14 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     });
     
     renderer.setSize(RENDER_WIDTH, RENDER_HEIGHT);
-    // Super-sampling for smoothness (Limit to 2 to avoid crash)
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); 
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     // --- CAPTURING VIEWS ---
-    const distance = maxDim * 3.5; // Zoom out slightly more for better context
-    const lookAtTarget = new THREE.Vector3(0, size.y / 2, 0); // Look at center of object
+    const distance = maxDim * 3.5;
+    const lookAtTarget = new THREE.Vector3(0, size.y / 2, 0);
 
     const views: { name: string; pos: THREE.Vector3; up: THREE.Vector3 }[] = [];
 
@@ -215,16 +225,12 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         });
     };
 
-    // 1. Orbit around
     for (let i = 0; i < 8; i++) {
         const angle = (i * 45) * (Math.PI / 180);
         addView(`view_${i * 45}.png`, Math.sin(angle), 0.5, Math.cos(angle), 0, 1, 0); 
     }
     
-    // 2. Top-down
     addView('top.png', 0, 1, 0, 0, 0, -1);
-    
-    // 3. Isometric-like corners
     addView('iso_1.png', 1, 0.8, 1, 0, 1, 0);
     addView('iso_2.png', -1, 0.8, 1, 0, 1, 0);
 
@@ -232,7 +238,6 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
 
     for (const v of views) {
         camera.position.copy(v.pos);
-        // Offset camera height slightly relative to object center for better framing
         camera.position.y += size.y * 0.4; 
         camera.up.copy(v.up);
         camera.lookAt(lookAtTarget);
