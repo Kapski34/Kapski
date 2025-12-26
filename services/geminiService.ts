@@ -4,8 +4,8 @@ import { BackgroundIntensity } from "../App";
 // Helper for delays
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Robust retry wrapper for API calls
-async function retryOperation<T>(operation: () => Promise<T>, delayMs: number = 3000, retries: number = 3): Promise<T> {
+// Standard retry wrapper for API calls (Fast retry for Paid Tier)
+async function retryOperation<T>(operation: () => Promise<T>, defaultDelay: number = 1000, retries: number = 3): Promise<T> {
     try {
         return await operation();
     } catch (error: any) {
@@ -13,10 +13,10 @@ async function retryOperation<T>(operation: () => Promise<T>, delayMs: number = 
         const isRateLimit = error?.status === 429 || error?.message?.includes('429') || error?.message?.includes('Quota') || error?.message?.includes('RESOURCE_EXHAUSTED');
         
         if (retries > 0 && isRateLimit) {
-            console.warn(`Rate limit hit (429). Retrying in ${delayMs}ms... (${retries} retries left)`);
-            await delay(delayMs);
-            // Exponential backoff
-            return retryOperation(operation, delayMs * 1.5, retries - 1);
+            console.warn(`Rate limit hit (429). Retrying in ${defaultDelay}ms... (${retries} retries left)`);
+            await delay(defaultDelay);
+            // Exponential backoff: 1s -> 2s -> 4s
+            return retryOperation(operation, defaultDelay * 2, retries - 1);
         }
         throw error;
     }
@@ -130,7 +130,7 @@ export const addWhiteBackground = async (imageFile: Blob): Promise<Blob> => {
     if (!part?.inlineData) throw new Error("AI nie zwróciło obrazu.");
     const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
     return await res.blob();
-  }, 4000); // 4s delay for retry
+  });
 };
 
 const VARIATION_SHOTS = [
@@ -164,19 +164,18 @@ export const generateAdditionalImages = async (
   intensity: BackgroundIntensity = 'normal'
 ): Promise<{ name: string; blob: Blob }[]> => {
     if (!process.env.API_KEY || count <= 0) return [];
-    console.log(`Generowanie ${count} dodatkowych zdjęć...`);
+    console.log(`Generowanie ${count} dodatkowych zdjęć (tryb szybki)...`);
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     
     const inputs = Array.isArray(sourceImages) ? sourceImages : [sourceImages];
     if (inputs.length === 0) return [];
 
     const config = INTENSITY_CONFIG[intensity];
-    const results: { name: string; blob: Blob }[] = [];
 
-    // EXECUTE SEQUENTIALLY with Retry Logic
-    for (let i = 0; i < count; i++) {
+    // EXECUTE IN PARALLEL for Paid Tier Speed
+    const promises = Array.from({ length: count }).map(async (_, i) => {
         const sourceBlob = inputs[i % inputs.length];
-        if (!sourceBlob) continue;
+        if (!sourceBlob) return null;
 
         const shotIndex = (startIndex + i) % VARIATION_SHOTS.length;
         const shot = VARIATION_SHOTS[shotIndex];
@@ -197,9 +196,6 @@ export const generateAdditionalImages = async (
         `.trim();
 
         try {
-            // Intentional delay between iterations to avoid 429
-            if (i > 0) await delay(3500);
-
             const resultBlob = await retryOperation(async () => {
                 const imagePart = await fileToGenerativePart(sourceBlob);
                 const ratio = await detectAspectRatio(sourceBlob);
@@ -215,16 +211,18 @@ export const generateAdditionalImages = async (
                     return await res.blob();
                 }
                 throw new Error("No image data returned");
-            }, 5000); // 5s wait for retry
+            });
 
-            results.push({ name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob: resultBlob });
+            return { name: `gen_${intensity}_${shotIndex + 1}_${Date.now()}.png`, blob: resultBlob };
             
         } catch (error) { 
-            console.error(`Błąd generowania zdjęcia ${i+1}/${count}:`, error); 
+            console.error(`Błąd generowania zdjęcia ${i+1}/${count}:`, error);
+            return null; 
         }
-    }
+    });
 
-    return results;
+    const results = await Promise.all(promises);
+    return results.filter((r): r is { name: string; blob: Blob } => r !== null);
 };
 
 export const changeImageColor = async (imageFile: Blob, sourceColorHex: string, targetColorHex: string): Promise<Blob> => {
