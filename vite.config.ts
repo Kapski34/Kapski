@@ -14,6 +14,18 @@ export default defineConfig(({ mode }) => {
     define: {
       // Przekazujemy klucz do aplikacji klienckiej jako string
       'process.env.API_KEY': JSON.stringify(apiKey)
+    },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            vendor: ['react', 'react-dom'],
+            three: ['three'],
+            genai: ['@google/genai']
+          }
+        }
+      },
+      chunkSizeWarningLimit: 1000
     }
   };
 });
