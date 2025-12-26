@@ -3,7 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Dodano user-scalable=no oraz maximum-scale=1.0 dla wrażenia native app -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <title>Generator Opisów Aukcji 3D na Allegro</title>
     <!-- Tailwind CSS wczytujemy z CDN dla zachowania stylów bez dodatkowej konfiguracji PostCSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -23,7 +24,7 @@
 }
 </script>
 </head>
-  <body class="bg-slate-950 text-gray-100">
+  <body class="bg-slate-950 text-gray-100 select-none touch-pan-y">
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
   </body>
