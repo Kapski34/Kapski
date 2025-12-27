@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
@@ -430,15 +431,17 @@ export const App: React.FC = () => {
             <div className="bg-slate-900 p-1 rounded-xl border border-gray-700 flex gap-2 min-w-max">
                 <button
                     onClick={() => setActiveTab('generator')}
-                    className={`px-6 py-2 rounded-lg font-bold transition-all ${activeTab === 'generator' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                    className={`px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 ${activeTab === 'generator' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
                 >
                     Generator STL
+                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
                 </button>
                 <button
                     onClick={() => setActiveTab('photo')}
-                    className={`px-6 py-2 rounded-lg font-bold transition-all ${activeTab === 'photo' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
+                    className={`px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 ${activeTab === 'photo' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
                 >
                     Generator ze Zdjęcia
+                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
                 </button>
                 <button
                     onClick={() => setActiveTab('studio')}
@@ -446,6 +449,7 @@ export const App: React.FC = () => {
                 >
                     <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
                     Wirtualne Studio
+                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
                 </button>
                 <button
                     onClick={() => setActiveTab('ean')}
@@ -453,6 +457,7 @@ export const App: React.FC = () => {
                 >
                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" /></svg>
                     Generator EAN
+                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
                 </button>
             </div>
         </div>

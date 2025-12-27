@@ -1,3 +1,4 @@
+
 import React, { useState } from 'react';
 import { FileUpload } from './FileUpload';
 import { generateStudioProImages, addWhiteBackground } from '../services/geminiService';
@@ -95,7 +96,10 @@ export const VirtualStudio: React.FC = () => {
     return (
         <div className="bg-slate-900 rounded-2xl shadow-2xl p-6 md:p-8 border border-slate-800">
             <div className="text-center mb-10">
-                <h2 className="text-4xl font-bold text-white mb-3">Wirtualne Studio Fotograficzne</h2>
+                <div className="inline-flex items-center gap-3 mb-3">
+                    <h2 className="text-4xl font-bold text-white">Wirtualne Studio Fotograficzne</h2>
+                    <span className="bg-purple-500/20 text-purple-400 text-xs font-bold px-2 py-1 rounded border border-purple-500/30 uppercase tracking-tighter">Wersja Alfa</span>
+                </div>
                 <p className="text-gray-400 text-lg">Przekształć zwykłe zdjęcie z telefonu w profesjonalną ofertę sprzedażową.</p>
             </div>
 

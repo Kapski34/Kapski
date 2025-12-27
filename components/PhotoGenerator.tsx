@@ -1,3 +1,4 @@
+
 import React, { useState, useRef } from 'react';
 import { FileUpload } from './FileUpload';
 import { ImagePreview } from './ImagePreview';
@@ -294,7 +295,10 @@ export const PhotoGenerator: React.FC = () => {
   return (
     <div className="bg-slate-900 rounded-2xl shadow-2xl p-6 sm:p-8 border border-slate-800 animate-fade-in">
         <div className="text-center mb-8">
-            <h2 className="text-3xl font-bold text-white mb-2">Generator ze Zdjęcia</h2>
+            <div className="inline-flex items-center gap-2 mb-2">
+                <h2 className="text-3xl font-bold text-white">Generator ze Zdjęcia</h2>
+                <span className="bg-indigo-500/20 text-indigo-400 text-[10px] font-bold px-2 py-1 rounded border border-indigo-500/30 uppercase tracking-tighter">Wersja Alfa</span>
+            </div>
             <p className="text-gray-400">Wgraj zdjęcia produktu, aby wygenerować profesjonalną aukcję (bez modelu 3D).</p>
         </div>
 
