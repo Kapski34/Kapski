@@ -1,10 +1,11 @@
+
 import * as THREE from 'three';
 import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { ThreeMFLoader } from 'three/addons/loaders/3MFLoader.js';
 
-// High resolution for crisp details
-const RENDER_WIDTH = 2048; 
-const RENDER_HEIGHT = 2048;
+// Increased resolution for better detail detection
+const RENDER_WIDTH = 1024; 
+const RENDER_HEIGHT = 1024;
 
 interface ModelDimensions {
     x: number;
@@ -22,72 +23,21 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
     let dimensions: ModelDimensions;
     let objectToFrame: THREE.Object3D;
     const geometriesToDispose: THREE.BufferGeometry[] = [];
-    const materialsToDispose: THREE.Material[] = [];
     
-    // Default Material (Fallback) - Light Grey Satin
-    const defaultMaterial = new THREE.MeshStandardMaterial({
-        color: 0xE0E0E0,
-        roughness: 0.5,
-        metalness: 0.1,
-        side: THREE.DoubleSide
+    // MATERIAL: NEUTRAL GREY PLASTIC - Optimized for AI-to-Image input
+    const baseMaterial = new THREE.MeshStandardMaterial({
+        color: 0xDDDDDD,     // Standard Grey
+        roughness: 0.5,      // Semi-gloss/Plastic look (easier for AI to texture than dry clay)
+        metalness: 0.1,      // Slight reflectivity
+        flatShading: false,
     });
-    materialsToDispose.push(defaultMaterial);
     
-    // Edge/Line Material for technical look
-    const lineMaterial = new THREE.LineBasicMaterial({ 
-        color: 0x222222, 
-        linewidth: 1, 
-        transparent: true, 
-        opacity: 0.15 
-    });
-    materialsToDispose.push(lineMaterial);
+    // Very subtle lines, just enough for definition but not to look like a sketch
+    const lineMaterial = new THREE.LineBasicMaterial({ color: 0x222222, linewidth: 1, transparent: true, opacity: 0.15 });
 
     const fileBuffer = await modelFile.arrayBuffer();
 
-    const processMesh = (mesh: THREE.Mesh) => {
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-
-        // Ensure geometry normals exist for proper lighting
-        if (mesh.geometry && !mesh.geometry.attributes.normal) {
-            mesh.geometry.computeVertexNormals();
-        }
-
-        const hasVertexColors = mesh.geometry && mesh.geometry.hasAttribute('color');
-
-        if (!mesh.material) {
-            mesh.material = defaultMaterial.clone();
-            materialsToDispose.push(mesh.material);
-        } else {
-            // Robust material conversion to StandardMaterial (PBR)
-            const oldMaterials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-            
-            const newMaterials = oldMaterials.map(oldMat => {
-                // Check if we can just reuse color from the old material
-                const oldColor = (oldMat as any).color || new THREE.Color(0xffffff);
-                const oldMap = (oldMat as any).map || null;
-                const oldOpacity = (oldMat as any).opacity ?? 1;
-                const oldTransparent = (oldMat as any).transparent ?? false;
-
-                const newMat = new THREE.MeshStandardMaterial({
-                    color: oldColor,
-                    map: oldMap,
-                    vertexColors: hasVertexColors, // Critical for 3MF colors
-                    roughness: 0.6, 
-                    metalness: 0.1,
-                    side: THREE.DoubleSide,
-                    transparent: oldTransparent,
-                    opacity: oldOpacity
-                });
-
-                materialsToDispose.push(newMat);
-                return newMat;
-            });
-
-            mesh.material = Array.isArray(mesh.material) ? newMaterials : newMaterials[0];
-        }
-
-        // Add subtle edges for better shape definition
+    const addEdgesToMesh = (mesh: THREE.Mesh) => {
         if (mesh.geometry) {
             const edges = new THREE.EdgesGeometry(mesh.geometry, 25); 
             const line = new THREE.LineSegments(edges, lineMaterial);
@@ -96,112 +46,117 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         }
     };
 
-    // --- LOADER LOGIC ---
     if (modelFile.name.toLowerCase().endsWith('.3mf')) {
         const loader = new ThreeMFLoader();
         objectToFrame = loader.parse(fileBuffer);
-        
-        // Calculate size immediately
         const box = new THREE.Box3().setFromObject(objectToFrame);
         const size = new THREE.Vector3();
         box.getSize(size);
         dimensions = { x: size.x, y: size.y, z: size.z };
         
+        // 3MF PRESERVATION LOGIC
         objectToFrame.traverse(child => {
             if (child instanceof THREE.Mesh) {
-                processMesh(child);
+                // If the 3MF loaded a material, we KEEP it to preserve color.
+                // We only adjust properties to make it look good in our lighting.
+                if (child.material) {
+                    // Handle array of materials or single material
+                    const materials = Array.isArray(child.material) ? child.material : [child.material];
+                    
+                    materials.forEach(mat => {
+                        // Ensure it reacts to light properly
+                        mat.needsUpdate = true;
+                        
+                        // If it's a Standard or Phong material, we can tune it for plastic look
+                        if ('roughness' in mat) {
+                             // If roughness is default (1), make it smoother like plastic (0.5)
+                             if (mat.roughness === 1) mat.roughness = 0.5;
+                        }
+                        if ('metalness' in mat) {
+                             mat.metalness = 0.1;
+                        }
+                        mat.flatShading = false;
+                    });
+                } else {
+                    // Fallback only if no material exists
+                    child.material = baseMaterial;
+                }
+
+                child.castShadow = true;
+                child.receiveShadow = true;
+                addEdgesToMesh(child);
             }
         });
     } else {
         const loader = new STLLoader();
         const geometry = loader.parse(fileBuffer) as THREE.BufferGeometry;
         
-        if (!geometry.attributes.normal) geometry.computeVertexNormals();
+        geometry.computeVertexNormals();
         geometry.center(); 
         geometry.computeBoundingBox();
         geometriesToDispose.push(geometry);
-        
         const size = new THREE.Vector3();
         geometry.boundingBox!.getSize(size);
         dimensions = { x: size.x, y: size.y, z: size.z };
         
-        const mesh = new THREE.Mesh(geometry, defaultMaterial.clone());
-        processMesh(mesh);
+        const mesh = new THREE.Mesh(geometry, baseMaterial);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        addEdgesToMesh(mesh);
         objectToFrame = mesh;
     }
     
-    // --- SCENE SETUP ---
     const scene = new THREE.Scene();
-    
-    const camera = new THREE.PerspectiveCamera(30, 1, 0.1, 10000); 
+    scene.background = new THREE.Color(0xffffff); // White background
+
+    // CAMERA RIG SETUP
+    const camera = new THREE.PerspectiveCamera(35, 1, 0.1, 10000);
     scene.add(camera);
 
-    // --- LIGHTING (Studio Setup) ---
-    const ambientLight = new THREE.AmbientLight(0xffffff, 0.8); // Slightly brighter ambient
+    // 1. Key Light
+    const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+    keyLight.position.set(10, 10, 10);
+    keyLight.castShadow = true;
+    keyLight.shadow.bias = -0.0001;
+    keyLight.shadow.mapSize.width = 2048;
+    keyLight.shadow.mapSize.height = 2048;
+    camera.add(keyLight);
+
+    // 2. Fill Light
+    const fillLight = new THREE.DirectionalLight(0xeef2ff, 0.6);
+    fillLight.position.set(-10, 0, 10);
+    fillLight.castShadow = false;
+    camera.add(fillLight);
+
+    // 3. Rim/Back Light
+    const rimLight = new THREE.DirectionalLight(0xffffff, 0.4);
+    rimLight.position.set(0, 10, -10);
+    camera.add(rimLight);
+
+    // Ambient light
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
 
-    const mainLight = new THREE.DirectionalLight(0xffffff, 1.2);
-    mainLight.position.set(5, 12, 8);
-    mainLight.castShadow = true;
-    mainLight.shadow.mapSize.width = 2048; // Optimized shadow map
-    mainLight.shadow.mapSize.height = 2048;
-    mainLight.shadow.bias = -0.0001;
-    scene.add(mainLight);
-
-    const fillLight = new THREE.DirectionalLight(0xeef2ff, 0.6);
-    fillLight.position.set(-8, 2, 5);
-    scene.add(fillLight);
-    
-    const backLight = new THREE.DirectionalLight(0xffffff, 0.6);
-    backLight.position.set(0, 8, -10);
-    scene.add(backLight);
-
-    // --- POSITIONING ---
-    const box = new THREE.Box3().setFromObject(objectToFrame);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const center = box.getCenter(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z);
-    
-    objectToFrame.position.sub(center);
-    objectToFrame.position.y += size.y / 2;
-    
-    scene.add(objectToFrame);
-
-    // --- SHADOW CATCHER ---
-    const planeGeometry = new THREE.PlaneGeometry(2000, 2000);
-    planeGeometry.rotateX(-Math.PI / 2);
-    
-    const planeMaterial = new THREE.ShadowMaterial({
-        opacity: 0.15,
-        color: 0x000000
-    });
-    
-    const shadowPlane = new THREE.Mesh(planeGeometry, planeMaterial);
-    shadowPlane.position.y = 0; 
-    shadowPlane.receiveShadow = true;
-    scene.add(shadowPlane);
-    
-    geometriesToDispose.push(planeGeometry);
-    materialsToDispose.push(planeMaterial);
-
-    // --- RENDERER ---
-    const renderer = new THREE.WebGLRenderer({ 
-        antialias: true, 
-        preserveDrawingBuffer: true, 
-        alpha: true, 
-        powerPreference: "high-performance"
-    });
-    
+    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true, alpha: true });
     renderer.setSize(RENDER_WIDTH, RENDER_HEIGHT);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2)); 
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    
+    scene.add(objectToFrame);
 
-    // --- CAPTURING VIEWS ---
-    const distance = maxDim * 3.5;
-    const lookAtTarget = new THREE.Vector3(0, size.y / 2, 0);
+    // CENTER & SCALE
+    const box = new THREE.Box3().setFromObject(objectToFrame);
+    const sizeVec = new THREE.Vector3();
+    box.getSize(sizeVec);
+    const center = box.getCenter(new THREE.Vector3());
+    const maxDim = Math.max(sizeVec.x, sizeVec.y, sizeVec.z);
+    
+    objectToFrame.position.sub(center); 
+
+    // Move camera back enough to fit object
+    const distance = maxDim * 2.2;
+
     const views: { name: string; pos: THREE.Vector3; up: THREE.Vector3 }[] = [];
 
     const addView = (name: string, x: number, y: number, z: number, upX: number, upY: number, upZ: number) => {
@@ -212,33 +167,50 @@ export const generateImagesFromModel = async (modelFile: File): Promise<RenderRe
         });
     };
 
+    // 1. EQUATORIAL RING
     for (let i = 0; i < 8; i++) {
         const angle = (i * 45) * (Math.PI / 180);
-        addView(`view_${i * 45}.png`, Math.sin(angle), 0.5, Math.cos(angle), 0, 1, 0); 
+        addView(`ring_y_${i * 45}.png`, Math.sin(angle), 0, Math.cos(angle), 0, 1, 0);
     }
+
+    // 2. POLAR RING
+    for (let i = 0; i < 8; i++) {
+        if (i === 0 || i === 4) continue; 
+        const angle = (i * 45) * (Math.PI / 180);
+        addView(`ring_x_${i * 45}.png`, 0, Math.sin(angle), Math.cos(angle), 0, Math.cos(angle + Math.PI/2), -Math.sin(angle + Math.PI/2));
+    }
+
+    // 3. ISOMETRIC CORNERS
+    const isoDist = 1;
+    addView('iso_top_fr.png', isoDist, isoDist, isoDist, 0, 1, 0);
+    addView('iso_top_fl.png', -isoDist, isoDist, isoDist, 0, 1, 0);
+    addView('iso_top_br.png', isoDist, isoDist, -isoDist, 0, 1, 0);
+    addView('iso_top_bl.png', -isoDist, isoDist, -isoDist, 0, 1, 0);
     
-    addView('top.png', 0, 1, 0, 0, 0, -1);
-    addView('iso_1.png', 1, 0.8, 1, 0, 1, 0);
-    addView('iso_2.png', -1, 0.8, 1, 0, 1, 0);
+    addView('iso_bot_fr.png', isoDist, -isoDist, isoDist, 0, 1, 0);
+    addView('iso_bot_fl.png', -isoDist, -isoDist, isoDist, 0, 1, 0);
+    addView('iso_bot_br.png', isoDist, -isoDist, -isoDist, 0, 1, 0);
+    addView('iso_bot_bl.png', -isoDist, -isoDist, -isoDist, 0, 1, 0);
+
+    // 4. DIRECT TOP/BOTTOM
+    addView('top_direct.png', 0, 1, 0, 0, 0, -1);
+    addView('bottom_direct.png', 0, -1, 0, 0, 0, 1);
 
     const imageFiles: File[] = [];
 
     for (const v of views) {
         camera.position.copy(v.pos);
-        camera.position.y += size.y * 0.4; 
         camera.up.copy(v.up);
-        camera.lookAt(lookAtTarget);
+        camera.lookAt(0, 0, 0);
         camera.updateProjectionMatrix();
         
         renderer.render(scene, camera);
-        const blob = await new Promise<Blob | null>(res => renderer.domElement.toBlob(res, 'image/png', 1.0));
+        const blob = await new Promise<Blob | null>(res => renderer.domElement.toBlob(res, 'image/png'));
         if (blob) imageFiles.push(new File([blob], v.name, { type: 'image/png' }));
     }
 
-    // --- CLEANUP ---
     renderer.dispose();
     geometriesToDispose.forEach(g => g.dispose());
-    materialsToDispose.forEach(m => m.dispose());
 
     return { images: imageFiles, dimensions, weight: null };
 };
