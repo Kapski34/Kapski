@@ -344,6 +344,21 @@ export const App: React.FC = () => {
       } catch (err) { console.error("Błąd regeneracji:", err); }
   };
 
+  // Fix: Implemented handleAnalyzeCost to solve "Cannot find name 'handleAnalyzeCost'" error.
+  const handleAnalyzeCost = async () => {
+    if (!selectedImages[0] || !auctionTitle) return;
+    setCostAnalysisStatus('loading');
+    setCostAnalysisError(null);
+    try {
+      const result = await analyzePricing(selectedImages[0].blob, auctionTitle);
+      setCostAnalysisResult(result);
+      setCostAnalysisStatus('success');
+    } catch (err) {
+      setCostAnalysisStatus('error');
+      setCostAnalysisError(err instanceof Error ? err.message : 'Wystąpił błąd podczas analizy cen.');
+    }
+  };
+
   const handleExport = async (credentials: any) => {
     setExportStatus('exporting');
     setExportError(null);
@@ -394,16 +409,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleAnalyzeCost = async () => {
-    if (!selectedImages[0] || !auctionTitle) return;
-    setCostAnalysisStatus('loading');
-    try {
-      const result = await analyzePricing(selectedImages[0].blob, auctionTitle);
-      setCostAnalysisResult(result);
-      setCostAnalysisStatus('success');
-    } catch (err) { setCostAnalysisStatus('error'); }
-  };
-  
   const handleDownloadPackage = async () => {
     if (!selectedImages || !auctionTitle) return;
     setIsPackaging(true);
@@ -433,7 +438,7 @@ export const App: React.FC = () => {
                     onClick={() => setActiveTab('generator')}
                     className={`px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 ${activeTab === 'generator' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
                 >
-                    Generator STL
+                    Generator STL+3mf
                     <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
                 </button>
                 <button
@@ -457,7 +462,7 @@ export const App: React.FC = () => {
                 >
                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" /></svg>
                     Generator EAN
-                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
+                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Beta</span>
                 </button>
             </div>
         </div>
