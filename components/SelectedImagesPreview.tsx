@@ -62,15 +62,19 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Nie można uzyskać kontekstu canvas.');
       const img = new Image();
+      img.crossOrigin = "anonymous"; // v60: Fix dla CORS przy pobieraniu
+      
       const objectUrl = URL.createObjectURL(image.blob);
       await new Promise<void>((resolve, reject) => {
         img.onload = () => { URL.revokeObjectURL(objectUrl); resolve(); };
         img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error(`Nie można załadować obrazu`)); };
         img.src = objectUrl;
       });
+
       canvas.width = img.naturalWidth;
       canvas.height = img.naturalHeight;
       ctx.drawImage(img, 0, 0);
+      
       canvas.toBlob((pngBlob) => {
         if (!pngBlob) { setDownloadingImage(null); return; }
         const pngUrl = URL.createObjectURL(pngBlob);
@@ -84,7 +88,10 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
         URL.revokeObjectURL(pngUrl);
         setDownloadingImage(null);
       }, 'image/png', 1.0);
-    } catch (error) { setDownloadingImage(null); }
+    } catch (error) { 
+        setDownloadingImage(null);
+        setEditError("Błąd pobierania zdjęcia.");
+    }
   };
 
   const handleAddWhiteBg = async (image: { name: string; blob: Blob }) => {

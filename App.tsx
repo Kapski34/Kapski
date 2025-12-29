@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
@@ -21,7 +20,7 @@ import { PhotoGenerator } from './components/PhotoGenerator';
 // AUTH IMPORTS
 import { useAuth } from './contexts/AuthContext';
 import { AuthModal } from './components/AuthModal';
-import { TokenStore } from './components/TokenStore';
+import { TokenStore, PACKAGES } from './components/TokenStore'; // Import PACKAGES
 
 declare const JSZip: any;
 
@@ -30,6 +29,7 @@ type ExportStatus = 'idle' | 'exporting' | 'success' | 'error';
 export type BackgroundIntensity = 'calm' | 'normal' | 'crazy';
 export type PersonalityType = 'professional' | 'energetic' | 'luxury' | 'technical' | 'storyteller' | 'custom' | string;
 type Tab = 'generator' | 'studio' | 'ean' | 'photo';
+type MainView = 'app' | 'features' | 'pricing';
 
 interface SavedStyle {
     id: string;
@@ -64,7 +64,9 @@ export const App: React.FC = () => {
   const { user, userData, deductToken } = useAuth();
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [isTokenStoreOpen, setIsTokenStoreOpen] = useState(false);
+  const [initialStorePackage, setInitialStorePackage] = useState<string | undefined>(undefined);
 
+  const [mainView, setMainView] = useState<MainView>('app');
   const [activeTab, setActiveTab] = useState<Tab>('generator');
 
   const [modelFile, setModelFile] = useState<File | null>(null);
@@ -196,15 +198,13 @@ export const App: React.FC = () => {
       setExportError(null);
   }
 
-  // --- MAIN GENERATION HANDLER WITH AUTH CHECK ---
   const handleGenerate = useCallback(async () => {
-    // 1. Check Login
     if (!user) {
         setIsAuthModalOpen(true);
         return;
     }
-    // 2. Check Tokens
     if (!userData || userData.tokens < 1) {
+        setInitialStorePackage(undefined);
         setIsTokenStoreOpen(true);
         return;
     }
@@ -306,7 +306,6 @@ export const App: React.FC = () => {
       }
       setSelectedImages(finalGallery.slice(0, 4));
 
-      // DEDUCT TOKEN AFTER SUCCESSFUL GENERATION
       deductToken(1);
 
     } catch (err) {
@@ -315,9 +314,11 @@ export const App: React.FC = () => {
   }, [modelFile, imageFiles, costSettings, additionalInfo, imageStylePrompt, backgroundIntensity, personality, referenceLinks, user, userData, deductToken]);
 
   const handleRegenerateImage = async (index: number) => {
-      // Auth Check for Regeneration
       if (!user) return setIsAuthModalOpen(true);
-      if (!userData || userData.tokens < 1) return setIsTokenStoreOpen(true);
+      if (!userData || userData.tokens < 1) {
+          setInitialStorePackage(undefined);
+          return setIsTokenStoreOpen(true);
+      }
 
       if (!baseImageForAi || !auctionTitle) return;
       try {
@@ -338,13 +339,11 @@ export const App: React.FC = () => {
                   updated[index] = newImage!;
                   return updated;
               });
-              // Deduct token for regen
               deductToken(1);
           }
       } catch (err) { console.error("Błąd regeneracji:", err); }
   };
 
-  // Fix: Implemented handleAnalyzeCost to solve "Cannot find name 'handleAnalyzeCost'" error.
   const handleAnalyzeCost = async () => {
     if (!selectedImages[0] || !auctionTitle) return;
     setCostAnalysisStatus('loading');
@@ -364,7 +363,6 @@ export const App: React.FC = () => {
     setExportError(null);
     try {
       if (exportPlatform === 'allegro') {
-          // Use Allegro specific service
           const allegroData = {
               title: auctionTitle,
               descriptionParts: descriptionParts,
@@ -378,13 +376,11 @@ export const App: React.FC = () => {
           };
           const offerResponse = await createAllegroDraft(credentials, allegroData);
           
-          // Publish if requested
           if (credentials.publishImmediately && offerResponse.id) {
                await publishOffer(credentials.token, offerResponse.id, credentials.isSandbox);
           }
           
       } else {
-          // Standard Export Service
           const productData = {
             title: auctionTitle,
             description: descriptionParts.map(p => `<p>${p}</p>`).join(''),
@@ -427,194 +423,320 @@ export const App: React.FC = () => {
     } catch (err) { setError("Błąd ZIP."); } finally { setIsPackaging(false); }
   };
 
+  const handleBuyPackage = (pkgId: string) => {
+      setInitialStorePackage(pkgId);
+      setIsTokenStoreOpen(true);
+  };
+
+  // --- RENDERING HELPERS ---
+
+  const renderFeatures = () => (
+      <div className="bg-slate-900 rounded-2xl shadow-2xl p-6 sm:p-10 border border-slate-800 animate-fade-in">
+           <style>{`
+                @keyframes scan {
+                    0% { top: 0%; opacity: 0.8; }
+                    50% { top: 100%; opacity: 0.8; }
+                    51% { top: 100%; opacity: 0; }
+                    100% { top: 0%; opacity: 0; }
+                }
+                @keyframes gradient-x {
+                    0%, 100% { background-position: 0% 50%; }
+                    50% { background-position: 100% 50%; }
+                }
+           `}</style>
+           <h2 className="text-3xl font-bold text-center text-white mb-10">Dostępne Funkcje</h2>
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+               
+               {/* 1. STL GENERATOR */}
+               <div className="bg-slate-800/50 p-6 rounded-xl border border-gray-700 hover:border-cyan-500 transition-colors group cursor-default">
+                   <div className="mb-4 w-16 h-16 bg-cyan-900/20 rounded-lg flex items-center justify-center relative overflow-hidden">
+                       {/* Animated Cube Icon */}
+                       <div className="text-4xl transition-transform duration-700 group-hover:animate-[spin_4s_linear_infinite] group-hover:scale-110">🧊</div>
+                   </div>
+                   <h3 className="text-xl font-bold text-white mb-2 group-hover:text-cyan-400 transition-colors">Generator STL + 3MF</h3>
+                   <p className="text-gray-400 text-sm">Przekształca pliki modeli 3D w gotowe oferty. Automatycznie renderuje model w wirtualnym studiu pod 4 kątami, mierzy wymiary, szacuje koszty druku i pisze opis.</p>
+               </div>
+
+               {/* 2. PHOTO GENERATOR */}
+               <div className="bg-slate-800/50 p-6 rounded-xl border border-gray-700 hover:border-indigo-500 transition-colors group cursor-default">
+                   <div className="mb-4 w-16 h-16 bg-indigo-900/20 rounded-lg flex items-center justify-center relative overflow-hidden">
+                       {/* Checkerboard Background (Transparent) */}
+                       <div className="absolute inset-0 opacity-30" style={{backgroundImage: 'linear-gradient(45deg, #444 25%, transparent 25%), linear-gradient(-45deg, #444 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #444 75%), linear-gradient(-45deg, transparent 75%, #444 75%)', backgroundSize: '10px 10px', backgroundPosition: '0 0, 0 5px, 5px -5px, -5px 0px'}}></div>
+                       {/* Solid Overlay that fades out */}
+                       <div className="absolute inset-0 bg-slate-800 transition-opacity duration-700 group-hover:opacity-0"></div>
+                       <div className="relative z-10 text-4xl group-hover:scale-110 transition-transform duration-300">📸</div>
+                   </div>
+                   <h3 className="text-xl font-bold text-white mb-2 group-hover:text-indigo-400 transition-colors">Generator Zdjęcia</h3>
+                   <p className="text-gray-400 text-sm">Nie masz modelu 3D? Wgraj zwykłe zdjęcia produktu. AI usunie tło (jak na animacji powyżej), poprawi jakość, zidentyfikuje przedmiot i stworzy profesjonalny opis aukcji.</p>
+               </div>
+
+               {/* 3. VIRTUAL STUDIO */}
+               <div className="bg-slate-800/50 p-6 rounded-xl border border-gray-700 hover:border-purple-500 transition-colors group cursor-default">
+                   <div className="mb-4 w-16 h-16 bg-purple-900/20 rounded-lg flex items-center justify-center relative overflow-hidden">
+                       {/* Animated Gradient Background */}
+                       <div className="absolute inset-0 bg-gradient-to-r from-slate-900 via-purple-900 to-slate-900 bg-[length:200%_100%] transition-all duration-300 group-hover:animate-[gradient-x_3s_ease_infinite]"></div>
+                       <div className="relative z-10 text-4xl group-hover:rotate-12 transition-transform duration-500">✨</div>
+                   </div>
+                   <h3 className="text-xl font-bold text-white mb-2 group-hover:text-purple-400 transition-colors">Wirtualne Studio</h3>
+                   <p className="text-gray-400 text-sm">Masz "brzydkie" zdjęcie produktu? Umieść je w wirtualnej scenerii (np. na drewnianym stole, w lofcie, w neonowym świetle) za pomocą jednego kliknięcia.</p>
+               </div>
+
+                {/* 4. EAN GENERATOR */}
+                <div className="bg-slate-800/50 p-6 rounded-xl border border-gray-700 hover:border-emerald-500 transition-colors group cursor-default">
+                   <div className="mb-4 w-16 h-16 bg-emerald-900/20 rounded-lg flex items-center justify-center relative overflow-hidden">
+                       <div className="text-4xl text-emerald-100">🔍</div>
+                       {/* Scanning Laser Line */}
+                       <div className="absolute top-0 left-0 w-full h-0.5 bg-red-500 shadow-[0_0_8px_rgba(239,68,68,1)] opacity-0 group-hover:opacity-100 group-hover:animate-[scan_2s_linear_infinite]"></div>
+                   </div>
+                   <h3 className="text-xl font-bold text-white mb-2 group-hover:text-emerald-400 transition-colors">Generator EAN</h3>
+                   <p className="text-gray-400 text-sm">Wpisz kod EAN, a system znajdzie zdjęcia produktu w sieci, zweryfikuje ich autentyczność, wyczyści tło i przygotuje pełną ofertę.</p>
+               </div>
+           </div>
+      </div>
+  );
+
+  const renderPricing = () => (
+    <div className="bg-slate-900 rounded-2xl shadow-2xl p-6 sm:p-10 border border-slate-800 animate-fade-in">
+         <h2 className="text-3xl font-bold text-center text-white mb-10">Cennik Tokenów</h2>
+         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {PACKAGES.map((pkg) => (
+                <div key={pkg.id} className={`relative bg-slate-800 rounded-xl p-6 border flex flex-col hover:transform hover:scale-105 transition-all duration-300 ${pkg.popular ? 'border-purple-500 ring-1 ring-purple-500/50' : 'border-slate-700 hover:border-gray-500'}`}>
+                    {pkg.popular && <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-purple-600 text-white text-[10px] font-bold px-3 py-1 rounded-full shadow-lg">NAJPOPULARNIEJSZY</div>}
+                    
+                    <h3 className="text-xl font-bold text-gray-200 text-center mb-1">{pkg.label}</h3>
+                    <p className="text-xs text-gray-500 text-center mb-4">{pkg.desc}</p>
+                    
+                    <div className="text-center mb-6 bg-slate-900/50 py-3 rounded-lg">
+                        <span className="text-3xl font-extrabold text-white">{pkg.price} zł</span>
+                    </div>
+                    
+                    <ul className="space-y-3 mb-8 flex-1 text-sm">
+                        <li className="flex items-center gap-2 text-gray-300">
+                            <span className="text-purple-400 font-bold">✓</span> 
+                            <strong className="text-white">{pkg.tokens}</strong> generowań
+                        </li>
+                        <li className="flex items-center gap-2 text-gray-300">
+                            <span className="text-purple-400 font-bold">✓</span> 
+                            Wsparcie priorytetowe
+                        </li>
+                         <li className="flex items-center gap-2 text-gray-300">
+                            <span className="text-purple-400 font-bold">✓</span> 
+                            Faktura VAT 23%
+                        </li>
+                    </ul>
+
+                    <button 
+                        onClick={() => handleBuyPackage(pkg.id)}
+                        className={`w-full py-2 rounded-lg font-bold text-white transition-all ${pkg.popular ? 'bg-purple-600 hover:bg-purple-500' : 'bg-slate-700 hover:bg-slate-600'}`}
+                    >
+                        Kup Teraz
+                    </button>
+                </div>
+            ))}
+        </div>
+        <p className="text-center text-gray-500 text-sm mt-8">Płatności obsługiwane są przez bezpieczną bramkę Stripe. Tokeny są dodawane do konta natychmiast po zaksięgowaniu wpłaty.</p>
+    </div>
+  );
+
   return (
     <div className="min-h-screen bg-slate-950 text-gray-100 flex flex-col items-center p-4 sm:p-6 lg:p-8">
       <div className="w-full max-w-5xl">
-        <Header />
+        <Header 
+            activeView={mainView} 
+            onViewChange={setMainView} 
+            onOpenStore={() => { setInitialStorePackage(undefined); setIsTokenStoreOpen(true); }}
+        />
         
-        <div className="flex justify-center mt-8 mb-6 overflow-x-auto">
-            <div className="bg-slate-900 p-1 rounded-xl border border-gray-700 flex gap-2 min-w-max">
-                <button
-                    onClick={() => setActiveTab('generator')}
-                    className={`px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 ${activeTab === 'generator' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
-                >
-                    Generator STL+3mf
-                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
-                </button>
-                <button
-                    onClick={() => setActiveTab('photo')}
-                    className={`px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 ${activeTab === 'photo' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
-                >
-                    Generator ze Zdjęcia
-                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
-                </button>
-                <button
-                    onClick={() => setActiveTab('studio')}
-                    className={`px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 ${activeTab === 'studio' ? 'bg-purple-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
-                >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                    Wirtualne Studio
-                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
-                </button>
-                <button
-                    onClick={() => setActiveTab('ean')}
-                    className={`px-6 py-2 rounded-lg font-bold transition-all flex items-center gap-2 ${activeTab === 'ean' ? 'bg-emerald-600 text-white shadow-lg' : 'text-gray-400 hover:text-white'}`}
-                >
-                   <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" /></svg>
-                    Generator EAN
-                    <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Beta</span>
-                </button>
-            </div>
-        </div>
+        {mainView === 'features' && renderFeatures()}
+        {mainView === 'pricing' && renderPricing()}
 
-        {activeTab === 'studio' && <VirtualStudio />}
-        {activeTab === 'ean' && <EanGenerator />}
-        {activeTab === 'photo' && <PhotoGenerator />}
-        
-        {activeTab === 'generator' && (
-            <main className="relative bg-slate-900 rounded-2xl shadow-2xl p-6 sm:p-8 border border-slate-800 animate-fade-in">
-            <div className="absolute top-4 right-4">
-                <button onClick={() => setIsCostSettingsModalOpen(true)} className="p-2 rounded-full text-gray-400 hover:text-cyan-300">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
-                </button>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="flex flex-col gap-6">
-                <FileUpload id="model-upload" label="Wgraj model 3D (STL/3MF)" accept=".stl,.3mf,.zip" onChange={e => setModelFile(e.target.files?.[0] || null)} fileName={modelFile?.name} icon={<svg className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-14L4 7m0 0l8 4m-8-4v10l8 4" /></svg>} />
-                <FileUpload id="image-upload" label="Zdjęcia bazowe (opcjonalnie)" accept="image/*" onChange={e => setImageFiles(Array.from(e.target.files || []))} fileName={imageFiles.length > 0 ? `${imageFiles.length} zdjęć` : undefined} icon={<svg className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01" /></svg>} multiple />
-                
-                <div className="space-y-4 bg-slate-800/40 p-4 rounded-xl border border-gray-700">
-                    <div>
-                    <label className="block text-sm font-semibold text-cyan-400 mb-2">Styl komunikacji</label>
-                    <select
-                        value={personality}
-                        onChange={handlePersonalityChange}
-                        className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:ring-2 focus:ring-cyan-500"
-                    >
-                        <option value="professional">Profesjonalny / Ekspercki (Standard)</option>
-                        <option value="energetic">Energetyczny / Marketingowy (Hype)</option>
-                        <option value="luxury">Ekskluzywny / Minimalistyczny</option>
-                        <option value="technical">Czysto Techniczny / Precyzyjny</option>
-                        <option value="storyteller">Opowiadacz Historii (Storytelling)</option>
-                        
-                        {savedStyles.length > 0 && (
-                            <optgroup label="--- Moje Style ---">
-                                {savedStyles.map(style => (
-                                    <option key={style.id} value={style.id}>⭐ {style.name}</option>
-                                ))}
-                            </optgroup>
-                        )}
-                        <optgroup label="--- Opcje ---">
-                             <option value="custom">✨ Dodaj nowy styl (Trenuj AI)</option>
-                        </optgroup>
-                    </select>
+        {mainView === 'app' && (
+            <>
+                <div className="flex justify-center mt-8 mb-6 px-1 sm:px-0">
+                    <div className="bg-slate-900 p-1 rounded-xl border border-gray-700 grid grid-cols-1 sm:grid-cols-2 lg:flex lg:flex-row gap-2 w-full lg:w-auto">
+                        <button
+                            onClick={() => setActiveTab('generator')}
+                            className={`px-4 py-3 lg:px-6 lg:py-2 rounded-lg font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'generator' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-slate-800'}`}
+                        >
+                            Generator STL+3mf
+                            <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('photo')}
+                            className={`px-4 py-3 lg:px-6 lg:py-2 rounded-lg font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'photo' ? 'bg-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-slate-800'}`}
+                        >
+                            Generator ze Zdjęcia
+                            <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('studio')}
+                            className={`px-4 py-3 lg:px-6 lg:py-2 rounded-lg font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'studio' ? 'bg-purple-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-slate-800'}`}
+                        >
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                            Wirtualne Studio
+                            <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Alfa</span>
+                        </button>
+                        <button
+                            onClick={() => setActiveTab('ean')}
+                            className={`px-4 py-3 lg:px-6 lg:py-2 rounded-lg font-bold transition-all flex items-center justify-center gap-2 ${activeTab === 'ean' ? 'bg-emerald-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-slate-800'}`}
+                        >
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z" /></svg>
+                            Generator EAN
+                            <span className="text-[10px] bg-white/20 px-1.5 py-0.5 rounded text-white uppercase tracking-tighter">Beta</span>
+                        </button>
                     </div>
+                </div>
 
-                    {(personality === 'custom' || savedStyles.some(s => s.id === personality)) && (
-                        <div className="animate-fade-in space-y-3">
-                             {personality === 'custom' && (
-                                <div>
-                                    <label className="block text-xs font-semibold text-gray-400 mb-1">Nazwa Twojego Stylu</label>
-                                    <input 
-                                        type="text" 
-                                        value={newStyleName}
-                                        onChange={e => setNewStyleName(e.target.value)}
-                                        placeholder="np. Mój Sklep Vintage"
-                                        className="w-full p-2 bg-slate-900 border border-gray-600 rounded-md text-sm text-white"
-                                    />
-                                </div>
-                             )}
-
-                             <label className="block text-sm font-semibold text-purple-400">
-                                {personality === 'custom' ? 'Wklej linki do aukcji (trening)' : 'Linki referencyjne (zapisane)'}
-                            </label>
-                             <textarea 
-                                value={referenceLinks} 
-                                onChange={e => setReferenceLinks(e.target.value)} 
-                                placeholder="https://allegro.pl/oferta/..." 
-                                className="w-full h-24 p-3 bg-purple-900/20 border border-purple-500/50 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:ring-2 focus:ring-purple-500 focus:outline-none" 
-                             />
-                             
-                             <div className="flex justify-end pt-1">
-                                {personality === 'custom' ? (
-                                    <button 
-                                        onClick={saveStyle}
-                                        disabled={!newStyleName || !referenceLinks}
-                                        className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded shadow-lg transition-all"
-                                    >
-                                        Zapisz ten styl
-                                    </button>
-                                ) : (
-                                     <button 
-                                        onClick={() => deleteStyle(personality)}
-                                        className="px-4 py-2 bg-red-900/50 hover:bg-red-800 text-red-200 text-xs font-bold rounded border border-red-800 transition-all"
-                                    >
-                                        Usuń ten styl
-                                    </button>
+                {activeTab === 'studio' && <VirtualStudio />}
+                {activeTab === 'ean' && <EanGenerator />}
+                {activeTab === 'photo' && <PhotoGenerator />}
+                
+                {activeTab === 'generator' && (
+                    <main className="relative bg-slate-900 rounded-2xl shadow-2xl p-6 sm:p-8 border border-slate-800 animate-fade-in">
+                    <div className="absolute top-4 right-4">
+                        <button onClick={() => setIsCostSettingsModalOpen(true)} className="p-2 rounded-full text-gray-400 hover:text-cyan-300">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                        </button>
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="flex flex-col gap-6">
+                        <FileUpload id="model-upload" label="Wgraj model 3D (STL/3MF)" accept=".stl,.3mf,.zip" onChange={e => setModelFile(e.target.files?.[0] || null)} fileName={modelFile?.name} icon={<svg className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-14L4 7m0 0l8 4m-8-4v10l8 4" /></svg>} />
+                        <FileUpload id="image-upload" label="Zdjęcia bazowe (opcjonalnie)" accept="image/*" onChange={e => setImageFiles(Array.from(e.target.files || []))} fileName={imageFiles.length > 0 ? `${imageFiles.length} zdjęć` : undefined} icon={<svg className="h-8 w-8 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01" /></svg>} multiple />
+                        
+                        <div className="space-y-4 bg-slate-800/40 p-4 rounded-xl border border-gray-700">
+                            <div>
+                            <label className="block text-sm font-semibold text-cyan-400 mb-2">Styl komunikacji</label>
+                            <select
+                                value={personality}
+                                onChange={handlePersonalityChange}
+                                className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm text-gray-200 focus:ring-2 focus:ring-cyan-500"
+                            >
+                                <option value="professional">Profesjonalny / Ekspercki (Standard)</option>
+                                <option value="energetic">Energetyczny / Marketingowy (Hype)</option>
+                                <option value="luxury">Ekskluzywny / Minimalistyczny</option>
+                                <option value="technical">Czysto Techniczny / Precyzyjny</option>
+                                <option value="storyteller">Opowiadacz Historii (Storytelling)</option>
+                                
+                                {savedStyles.length > 0 && (
+                                    <optgroup label="--- Moje Style ---">
+                                        {savedStyles.map(style => (
+                                            <option key={style.id} value={style.id}>⭐ {style.name}</option>
+                                        ))}
+                                    </optgroup>
                                 )}
-                             </div>
+                                <optgroup label="--- Opcje ---">
+                                    <option value="custom">✨ Dodaj nowy styl (Trenuj AI)</option>
+                                </optgroup>
+                            </select>
+                            </div>
+
+                            {(personality === 'custom' || savedStyles.some(s => s.id === personality)) && (
+                                <div className="animate-fade-in space-y-3">
+                                    {personality === 'custom' && (
+                                        <div>
+                                            <label className="block text-xs font-semibold text-gray-400 mb-1">Nazwa Twojego Stylu</label>
+                                            <input 
+                                                type="text" 
+                                                value={newStyleName}
+                                                onChange={e => setNewStyleName(e.target.value)}
+                                                placeholder="np. Mój Sklep Vintage"
+                                                className="w-full p-2 bg-slate-900 border border-gray-600 rounded-md text-sm text-white"
+                                            />
+                                        </div>
+                                    )}
+
+                                    <label className="block text-sm font-semibold text-purple-400">
+                                        {personality === 'custom' ? 'Wklej linki do aukcji (trening)' : 'Linki referencyjne (zapisane)'}
+                                    </label>
+                                    <textarea 
+                                        value={referenceLinks} 
+                                        onChange={e => setReferenceLinks(e.target.value)} 
+                                        placeholder="https://allegro.pl/oferta/..." 
+                                        className="w-full h-24 p-3 bg-purple-900/20 border border-purple-500/50 rounded-lg text-sm text-gray-200 placeholder-gray-500 focus:ring-2 focus:ring-purple-500 focus:outline-none" 
+                                    />
+                                    
+                                    <div className="flex justify-end pt-1">
+                                        {personality === 'custom' ? (
+                                            <button 
+                                                onClick={saveStyle}
+                                                disabled={!newStyleName || !referenceLinks}
+                                                className="px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold rounded shadow-lg transition-all"
+                                            >
+                                                Zapisz ten styl
+                                            </button>
+                                        ) : (
+                                            <button 
+                                                onClick={() => deleteStyle(personality)}
+                                                className="px-4 py-2 bg-red-900/50 hover:bg-red-800 text-red-200 text-xs font-bold rounded border border-red-800 transition-all"
+                                            >
+                                                Usuń ten styl
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+
+                            <div>
+                            <label className="block text-sm font-semibold text-cyan-400 mb-2">Opis produktu (opcjonalnie)</label>
+                            <textarea value={additionalInfo} onChange={e => setAdditionalInfo(e.target.value)} placeholder="Np. Przeznaczenie, pasujące modele..." className="w-full h-16 p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
+                            </div>
+                            
+                            <div>
+                                <label className="block text-sm font-semibold text-cyan-400 mb-2">Stylistyka Zdjęć AI</label>
+                                <div className="flex bg-slate-900 p-1 rounded-lg border border-gray-700 mb-2">
+                                    <button 
+                                    onClick={() => setBackgroundIntensity('calm')} 
+                                    className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'calm' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                                    >
+                                    Spokojne
+                                    </button>
+                                    <button 
+                                    onClick={() => setBackgroundIntensity('normal')} 
+                                    className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'normal' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                                    >
+                                    Normalne
+                                    </button>
+                                    <button 
+                                    onClick={() => setBackgroundIntensity('crazy')} 
+                                    className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'crazy' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
+                                    >
+                                    Szalone
+                                    </button>
+                                </div>
+                                <input type="text" value={imageStylePrompt} onChange={e => setImageStylePrompt(e.target.value)} placeholder="Własny prompt tła (np. 'Dżungla')..." className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
+                            </div>
+                        </div>
+
+                        <button onClick={handleGenerate} disabled={isLoading} className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg shadow-lg shadow-cyan-500/20 transform transition-all hover:scale-105">
+                            {isLoading ? 'Pracuję...' : 'Generuj Szybką Ofertę'}
+                        </button>
+                        </div>
+                        <ImagePreview imageFile={imageFiles[0] || modelFile} />
+                    </div>
+                    {isLoading && <Loader message={loadingMessage} />}
+                    {selectedImages.length > 0 && !isLoading && (
+                        <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
+                        <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => d ? {...d, [a]: v*10} : null)} weight={weight} onWeightChange={setWeight} />
+                        <SelectedImagesPreview 
+                            images={selectedImages} 
+                            onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} 
+                            onColorChange={async () => {}} 
+                            onRegenerate={handleRegenerateImage}
+                        />
+                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
+                            {printCost && <PrintCostEstimator cost={printCost} />}
+                            <CostAnalysis status={costAnalysisStatus} result={costAnalysisResult} error={costAnalysisError} onAnalyze={handleAnalyzeCost} />
+                        </div>
+                        <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
+                            <button onClick={handleDownloadPackage} disabled={isPackaging} className="px-8 py-3 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-lg shadow-lg transition-all">Pobierz pakiet .zip</button>
+                            <button onClick={() => {setExportPlatform('baselinker'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow-lg">Eksportuj do BaseLinker</button>
+                            <button onClick={() => {setExportPlatform('allegro'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-lg shadow-lg">Wystaw na Allegro</button>
+                        </div>
                         </div>
                     )}
-
-                    <div>
-                    <label className="block text-sm font-semibold text-cyan-400 mb-2">Opis produktu (opcjonalnie)</label>
-                    <textarea value={additionalInfo} onChange={e => setAdditionalInfo(e.target.value)} placeholder="Np. Przeznaczenie, pasujące modele..." className="w-full h-16 p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
-                    </div>
-                    
-                    <div>
-                        <label className="block text-sm font-semibold text-cyan-400 mb-2">Stylistyka Zdjęć AI</label>
-                        <div className="flex bg-slate-900 p-1 rounded-lg border border-gray-700 mb-2">
-                            <button 
-                            onClick={() => setBackgroundIntensity('calm')} 
-                            className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'calm' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
-                            >
-                            Spokojne
-                            </button>
-                            <button 
-                            onClick={() => setBackgroundIntensity('normal')} 
-                            className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'normal' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
-                            >
-                            Normalne
-                            </button>
-                            <button 
-                            onClick={() => setBackgroundIntensity('crazy')} 
-                            className={`flex-1 py-2 text-xs font-bold rounded-md transition-all ${backgroundIntensity === 'crazy' ? 'bg-cyan-600 text-white shadow-lg' : 'text-gray-500 hover:text-gray-300'}`}
-                            >
-                            Szalone
-                            </button>
-                        </div>
-                        <input type="text" value={imageStylePrompt} onChange={e => setImageStylePrompt(e.target.value)} placeholder="Własny prompt tła (np. 'Dżungla')..." className="w-full p-3 bg-slate-900 border border-gray-700 rounded-lg text-sm" />
-                    </div>
-                </div>
-
-                <button onClick={handleGenerate} disabled={isLoading} className="w-full py-4 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg shadow-lg shadow-cyan-500/20 transform transition-all hover:scale-105">
-                    {isLoading ? 'Pracuję...' : 'Generuj Szybką Ofertę'}
-                </button>
-                </div>
-                <ImagePreview imageFile={imageFiles[0] || modelFile} />
-            </div>
-            {isLoading && <Loader message={loadingMessage} />}
-            {selectedImages.length > 0 && !isLoading && (
-                <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
-                <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => d ? {...d, [a]: v*10} : null)} weight={weight} onWeightChange={setWeight} />
-                <SelectedImagesPreview 
-                    images={selectedImages} 
-                    onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} 
-                    onColorChange={async () => {}} 
-                    onRegenerate={handleRegenerateImage}
-                />
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-10">
-                    {printCost && <PrintCostEstimator cost={printCost} />}
-                    <CostAnalysis status={costAnalysisStatus} result={costAnalysisResult} error={costAnalysisError} onAnalyze={handleAnalyzeCost} />
-                </div>
-                <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
-                    <button onClick={handleDownloadPackage} disabled={isPackaging} className="px-8 py-3 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-lg shadow-lg transition-all">Pobierz pakiet .zip</button>
-                    <button onClick={() => {setExportPlatform('baselinker'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow-lg">Eksportuj do BaseLinker</button>
-                    <button onClick={() => {setExportPlatform('allegro'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-lg shadow-lg">Wystaw na Allegro</button>
-                </div>
-                </div>
-            )}
-            </main>
+                    </main>
+                )}
+            </>
         )}
 
         {isExportModalOpen && (
@@ -631,7 +753,11 @@ export const App: React.FC = () => {
         
         {/* MODALS FOR AUTH & TOKENS */}
         <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
-        <TokenStore isOpen={isTokenStoreOpen} onClose={() => setIsTokenStoreOpen(false)} />
+        <TokenStore 
+            isOpen={isTokenStoreOpen} 
+            onClose={() => { setIsTokenStoreOpen(false); setInitialStorePackage(undefined); }} 
+            initialPackageId={initialStorePackage}
+        />
       </div>
     </div>
   );

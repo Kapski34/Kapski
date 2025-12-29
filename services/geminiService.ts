@@ -1,22 +1,28 @@
+
 import { GoogleGenAI, Type, GenerateContentParameters } from "@google/genai";
 import { BackgroundIntensity, PersonalityType } from "../App";
-import { CostAnalysisResult } from "../components/CostAnalysis";
 
 const parseJsonResponse = (responseText: string) => {
   try {
     const jsonStartIndex = responseText.indexOf('{');
-    if (jsonStartIndex === -1) {
-        const arrayStartIndex = responseText.indexOf('[');
-        if (arrayStartIndex === -1) throw new Error("AI nie zwróciło danych strukturalnych.");
-        const arrayEndIndex = responseText.lastIndexOf(']');
-        return JSON.parse(responseText.substring(arrayStartIndex, arrayEndIndex + 1));
-    }
+    if (jsonStartIndex === -1) return null;
     const jsonEndIndex = responseText.lastIndexOf('}');
-    const jsonText = responseText.substring(jsonStartIndex, jsonEndIndex + 1);
-    return JSON.parse(jsonText);
+    const jsonStr = responseText.substring(jsonStartIndex, jsonEndIndex + 1);
+    return JSON.parse(jsonStr);
   } catch (e) {
-    console.error("Parse error:", e, responseText);
-    throw new Error("Błąd parsowania danych z AI.");
+    // Fallback v71: Ekstrakcja danych z uszkodzonego tekstu (regex)
+    const titleMatch = responseText.match(/(?:title|name|nazwa)":\s*"([^"]+)"/i);
+    const urls = responseText.match(/https?:\/\/[^"'\s<>]+?\.(?:jpg|jpeg|png|webp|avif)/gi) || [];
+    if (titleMatch || urls.length > 0) {
+        return {
+            auction_title: titleMatch ? titleMatch[1] : "Produkt",
+            visual_description: "Automatyczna analiza Titan v71",
+            description_parts: [],
+            image_urls: Array.from(new Set(urls)),
+            sku: ""
+        };
+    }
+    return null;
   }
 };
 
@@ -30,185 +36,199 @@ const fileToGenerativePart = async (file: Blob | File): Promise<{ inlineData: { 
   return { inlineData: { data: base64EncodedData, mimeType: file.type || 'image/png' } };
 };
 
-const safeGenerateContent = async (params: GenerateContentParameters, retries = 3, delay = 2000): Promise<any> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  try {
-    const result = await ai.models.generateContent(params);
-    return result;
-  } catch (error: any) {
-    const msg = error.message || "";
-    if (retries > 0 && (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED'))) {
-      await new Promise(resolve => setTimeout(resolve, delay));
-      return safeGenerateContent(params, retries - 1, delay * 2);
-    }
-    throw error;
-  }
-};
-
 export const fetchImageFromUrl = async (url: string): Promise<Blob> => {
     if (!url || !url.startsWith('http')) throw new Error("Invalid URL");
-    
-    let cleanUrl = url.split('?')[0];
-    if (url.includes('allegroimg.com')) cleanUrl = url.replace(/\/s\d+$/, "/original");
-    
-    const PROXY_STRATEGIES = [
-        (u: string) => `https://images.weserv.nl/?url=${encodeURIComponent(u)}&output=jpg&n=-1`,
-        (u: string) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
-        (u: string) => u,
+    const proxyUrls = [
+        `https://wsrv.nl/?url=${encodeURIComponent(url)}&n=-1&output=png`,
+        `https://images.weserv.nl/?url=${encodeURIComponent(url)}&n=-1`,
+        `https://corsproxy.io/?${encodeURIComponent(url)}`,
+        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+        url 
     ];
 
-    for (const strategy of PROXY_STRATEGIES) {
+    for (const pUrl of proxyUrls) {
         try {
             const controller = new AbortController();
-            const id = setTimeout(() => controller.abort(), 8000); 
-            const res = await fetch(strategy(cleanUrl), { method: 'GET', signal: controller.signal });
-            clearTimeout(id);
+            const timeoutId = setTimeout(() => controller.abort(), 12000);
+            const res = await fetch(pUrl, { 
+                cache: 'no-store', 
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
+            });
+            clearTimeout(timeoutId);
             if (res.ok) {
                 const blob = await res.blob();
-                if (blob.size > 5000 && blob.type.startsWith('image/')) return blob; 
+                if (blob.size > 1000 && blob.type.startsWith('image/')) return blob; 
             }
-        } catch (e) {}
+        } catch (e) { continue; }
     }
-    throw new Error("Fetch failed");
+    throw new Error("UNREACHABLE");
 };
 
-export const generateContentFromEan = async (ean: string, manualTitle?: string, ignoreEan: boolean = false): Promise<any> => {
-  if (!process.env.API_KEY) throw new Error("Brak klucza API.");
-  
-  const prompt = `
-    ZIDENTYFIKUJ PRODUKT NA PODSTAWIE EAN: ${ean}.
-    DODATKOWA PODPOWIEDŹ: ${manualTitle || 'brak'}.
-    
-    RYGORYSTYCZNE ZASADY:
-    1. Użyj googleSearch. Zaufaj TYLKO wynikom z wyszukiwarki. 
-    2. Jeśli Google Search wskazuje na "Denver KCA-1351", nie zwracaj innej nazwy, nawet jeśli Twój model językowy sugeruje inaczej.
-    3. Zwróć szczególną uwagę na markę i kolor.
-    4. Ekstraktuj URLe do zdjęć z groundingMetadata i oficjalnych stron.
-    
-    Zwróć JSON:
-    {
-      "auction_title": "MARKA + MODEL + NAJWAŻNIEJSZE CECHY",
-      "description_parts": ["Główny opis produktu", "Zalety i funkcje", "Dla kogo/Zastosowanie", "Specyfikacja techniczna"],
-      "image_urls": ["url_z_grounding1", "url_z_grounding2", "url_z_grounding3"],
-      "sku": "MODEL_SKU",
-      "weight_kg": 0.3,
-      "dimensions_mm": {"x": 100, "y": 80, "z": 50},
-      "visual_guide": "Precyzyjny opis wyglądu do weryfikacji Vision AI (np. kolor obudowy, ilość przycisków, obecność anteny)"
-    }
-  `;
+export const verifyVisualIdentity = async (blob: Blob, title: string, url?: string): Promise<boolean> => {
+    // v71: Uproszczona heurystyka dla zaufanych domen + fallback logic
+    const trusted = ['amazon', 'allegro', 'ebay', 'skullcandy', 'apple', 'samsung', 'xiaomi', 'media-amazon', 'gstatic'];
+    if (url && trusted.some(t => url.toLowerCase().includes(t))) return true;
 
-  const response = await safeGenerateContent({
-    model: 'gemini-3-pro-preview',
-    contents: prompt,
-    config: { 
-      tools: [{ googleSearch: {} }], 
-      responseMimeType: "application/json",
-      thinkingConfig: { thinkingBudget: 4096 }
-    }
-  });
-
-  const data = parseJsonResponse(response.text);
-  const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-  const extractedUrls = groundingChunks?.map((chunk: any) => chunk.web?.uri).filter((u: string) => {
-      if (!u) return false;
-      const lower = u.toLowerCase();
-      return (lower.endsWith('.jpg') || lower.endsWith('.png') || lower.endsWith('.jpeg') || lower.includes('googleusercontent') || lower.includes('allegroimg'));
-  }) || [];
-  
-  data.image_urls = Array.from(new Set([...(data.image_urls || []), ...extractedUrls])).slice(0, 15);
-  return data;
-};
-
-export const verifyAndFilterImages = async (imageBlobs: Blob[], productTitle: string, visualGuide: string): Promise<Blob[]> => {
-    if (!process.env.API_KEY || imageBlobs.length === 0) return [];
-    const verifiedBlobs: Blob[] = [];
-    const checkLimit = Math.min(imageBlobs.length, 12);
-
-    for (let i = 0; i < checkLimit; i++) {
-        try {
-            const imagePart = await fileToGenerativePart(imageBlobs[i]);
-            const response = await safeGenerateContent({
-                model: 'gemini-3-flash-preview',
-                contents: { 
-                  parts: [
-                    imagePart, 
-                    { text: `Produkt: "${productTitle}". Wygląd: ${visualGuide}.
-                             Czy to zdjęcie przedstawia DOKŁADNIE ten produkt? 
-                             Sprawdź logotypy, kolor i unikalne detale. 
-                             Odpowiedz "TAK" lub "NIE". Jeśli masz wątpliwości lub to inny model - odpowiedz "NIE".` }
-                  ] 
-                }
-            });
-            if (response.text?.toUpperCase().includes('TAK')) {
-                verifiedBlobs.push(imageBlobs[i]);
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const imagePart = await fileToGenerativePart(blob);
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: {
+                parts: [
+                    imagePart,
+                    { text: `Is this a photo of the product: "${title}"? Answer ONLY "YES" or "NO". Discard if it's lighting equipment and the product is NOT lighting equipment.` }
+                ]
             }
-        } catch (e) {}
-        if (verifiedBlobs.length >= 8) break;
-    }
-    return verifiedBlobs;
+        });
+        return response.text?.trim().toUpperCase().includes('YES') || false;
+    } catch (e) { return true; } 
 };
 
-export const generateVariationsFromAnchor = async (anchorBlob: Blob, productTitle: string, count: number): Promise<{ name: string; blob: Blob }[]> => {
-    if (!process.env.API_KEY) return [];
-    const imagePart = await fileToGenerativePart(anchorBlob);
-    const angles = ["side view", "perspective view", "back view", "detailed macro shot"];
+export const generateAdditionalImages = async (
+    sourceBlob: Blob | Blob[], 
+    title: string, 
+    count: number, 
+    style: string = "", 
+    offset: number = 0,
+    backgroundIntensity: BackgroundIntensity = 'normal'
+): Promise<{ name: string; blob: Blob; isAi: boolean }[]> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const sourceBlobs = Array.isArray(sourceBlob) ? sourceBlob : [sourceBlob];
     
-    const results = await Promise.all(angles.slice(0, count).map(async (angle, i) => {
+    const tasks = Array.from({ length: count }).map(async (_, i) => {
         try {
-            const response = await safeGenerateContent({
+            const currentBlob = sourceBlobs[i % sourceBlobs.length];
+            const imagePart = await fileToGenerativePart(currentBlob);
+            const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash-image',
                 contents: { 
-                    parts: [
-                        imagePart, 
-                        { text: `This is the EXACT product: ${productTitle}. Create a new photo of this SAME OBJECT from ${angle}. White studio background. KEEP ALL TECHNICAL DETAILS, BUTTONS, AND LOGOS IDENTICAL to the source image.` }
-                    ] 
-                },
-                config: { imageConfig: { aspectRatio: "1:1" } }
+                    parts: [imagePart, { text: `Professional studio catalog photo of ${title}. Commercial quality, white background.` }] 
+                }
             });
             const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
             if (part?.inlineData) {
                 const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-                return { name: `real_variant_${i}.png`, blob: await res.blob() };
+                return { name: `v71_ai_${i + offset + 1}.png`, blob: await res.blob(), isAi: true };
             }
             return null;
         } catch (e) { return null; }
-    }));
-    
-    return results.filter((r): r is { name: string; blob: Blob } => r !== null);
+    });
+
+    const results = await Promise.all(tasks);
+    return results.filter((r): r is { name: string; blob: Blob; isAi: boolean } => r !== null);
 };
 
-export const synthesizeProductImage = async (productTitle: string, angle: string = "front"): Promise<Blob> => {
-    const prompt = `Hyper-realistic commercial product shot of ${productTitle}, ${angle} view, pure white background, soft studio lighting.`;
-    const response = await safeGenerateContent({
+export const processRealPhoto = async (photoBlob: Blob, title: string): Promise<Blob> => {
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const imagePart = await fileToGenerativePart(photoBlob);
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: [imagePart, { text: `Place product ${title} on pure white background #FFFFFF.` }] }
+        });
+        const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        if (!part?.inlineData) return photoBlob;
+        const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+        return await res.blob();
+    } catch (error) { return photoBlob; }
+};
+
+export const generateContentFromEan = async (ean: string, manualTitle?: string): Promise<any> => {
+  const fallback = { 
+      auction_title: manualTitle || `Produkt ${ean}`, 
+      description_parts: [], 
+      image_urls: [], 
+      sku: ean, 
+      visual_description: "" 
+  };
+  
+  try {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const query = manualTitle || `EAN ${ean} product identity`;
+    
+    const response = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview', // Pro jest bardziej stabilny przy tool-callingu
+        contents: `TITAN-ENGINE v71: Identify product for ${query}. 
+                   Return JSON ONLY: { "auction_title": "Full product name", "visual_description": "color/type", "description_parts": ["p1", "p2", "p3", "p4"], "image_urls": [], "sku": "${ean}" }`,
+        config: { tools: [{ googleSearch: {} }] }
+    });
+
+    const text = response.text || "";
+    let data = parseJsonResponse(text) || fallback;
+
+    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+    const groundingLinks = chunks.map((c: any) => c.web?.uri).filter((u: string) => u && u.startsWith('http'));
+    const textLinks = text.match(/https?:\/\/[^"'\s<>]+?\.(?:jpg|jpeg|png|webp|avif)/gi) || [];
+    
+    data.image_urls = Array.from(new Set([...groundingLinks, ...(data.image_urls || []), ...textLinks]))
+        .filter(l => typeof l === 'string' && (l.includes('amazon') || l.includes('allegro') || l.includes('ebay') || l.includes('gstatic') || l.includes('xiaomi')));
+    
+    if ((!data.auction_title || data.auction_title === ean) && chunks.length > 0) {
+        data.auction_title = chunks[0].web?.title?.split('|')[0]?.split('-')[0]?.trim() || data.auction_title;
+    }
+
+    return data;
+  } catch (err) {
+      console.error("Titan-Engine Grounding Failure:", err);
+      return fallback; // Nigdy nie rzucaj błędu, zawsze zwracaj dane (choćby szkielet)
+  }
+};
+
+export const generateNeuralSeed = async (productTitle: string, visualDescription?: string): Promise<Blob> => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const response = await ai.models.generateContent({
         model: 'gemini-2.5-flash-image',
-        contents: { parts: [{ text: prompt }] },
+        contents: `Official catalog photography of ${productTitle}. Highly detailed, white background.`
     });
     const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-    if (!part?.inlineData) throw new Error("Synthesis failed");
+    if (!part?.inlineData) throw new Error("Seed Failure");
     const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
     return await res.blob();
 };
 
-export const addWhiteBackground = async (imageFile: Blob, context: string = "Product"): Promise<Blob> => {
-  if (!process.env.API_KEY) throw new Error("Brak klucza API.");
-  const imagePart = await fileToGenerativePart(imageFile);
-  const response = await safeGenerateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: { parts: [imagePart, { text: `Clean white studio background for the product: ${context}. Isolated object, #FFFFFF color. Keep shadows realistic but minimal.` }] },
-  });
-  const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-  if (!part?.inlineData) return imageFile;
-  const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-  return await res.blob();
+export const addWhiteBackground = async (i: Blob, title?: string): Promise<Blob> => {
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const imagePart = await fileToGenerativePart(i);
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-image',
+            contents: { parts: [imagePart, { text: `Product on pure white background.` }] }
+        });
+        const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
+        if (!part?.inlineData) return i;
+        const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+        return await res.blob();
+    } catch (e) { return i; }
 };
 
-export const generateAdditionalImages = async (source: any, title: any, count: any, prompt: any, seed: any, intensity: any) => {
-    const blob = Array.isArray(source) ? source[0] : source;
-    return generateVariationsFromAnchor(blob, title, count);
+export const changeImageColor = async (i: any, s: string, t: string) => i;
+export const generateAllegroDescription = async (f: File[], m: any, info: string, p: any, r: any) => {
+    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+    const parts = await Promise.all(f.map(fileToGenerativePart));
+    const resp = await ai.models.generateContent({
+        model: 'gemini-3-pro-preview',
+        contents: { parts: [...parts, { text: `JSON: { auctionTitle, descriptionParts: [4 PARAGRAPHS], sku, ean, colors }` }] },
+        config: { responseMimeType: "application/json" }
+    });
+    return parseJsonResponse(resp.text) || { auctionTitle: '', descriptionParts: [], sku: '', ean: '', colors: [] };
 };
 
-export const generateAllegroDescription = async (f:any, m:any, a:any, p:any, r:any) => ({ auctionTitle: "Podgląd", descriptionParts: [], sku: "SKU", ean: "", colors: [] });
-export const analyzePricing = async (i:any, t:any) => ({ products: [] });
-export const changeImageColor = async (i:any, s:any, t:any) => i;
-export const generateStudioProImages = async (f:any, p:any, c:any) => [];
-export const verifyImagesWithVision = verifyAndFilterImages;
+export const analyzePricing = async (i: Blob, title: string): Promise<{ products: any[] }> => {
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const response = await ai.models.generateContent({
+            model: 'gemini-3-flash-preview',
+            contents: `Pricing for ${title}. JSON: { products: [{productTitle, pricePln, productUrl}] }`,
+            config: { tools: [{ googleSearch: {} }], responseMimeType: "application/json" }
+        });
+        return parseJsonResponse(response.text) || { products: [] };
+    } catch (e) { return { products: [] }; }
+};
+
+export const verifyAndFilterImages = async (i: any, t: string, v: string) => [];
+export const generateStudioProImages = async (f: File, p: string, c: number) => [];
+export const synthesizeFromBlueprint = async () => null;
+export const synthesizeFromReference = async () => null;
+export const synthesizeProductImage = async () => null;

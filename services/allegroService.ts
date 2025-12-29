@@ -99,33 +99,24 @@ export const getShippingRates = async (token: string, isSandbox: boolean = false
 };
 
 export const searchProductByEan = async (token: string, ean: string, isSandbox: boolean = false) => {
-    // Używamy GTIN jako głównego parametru i wymuszamy katalog
-    const endpoint = `/sale/products?ean=${ean}`;
-    const data = await allegroFetch(endpoint, token, isSandbox, { method: 'GET' });
-    
-    if (!data.products || data.products.length === 0) {
-        throw new Error(`Nie znaleziono produktu o EAN ${ean} w Katalogu Allegro.`);
+    const endpoint = `/sale/products?gtin=${ean}`;
+    try {
+        const data = await allegroFetch(endpoint, token, isSandbox, { method: 'GET' });
+        if (!data.products || data.products.length === 0) return null;
+
+        const product = data.products[0];
+        const imageUrls = product.images ? product.images.map((img: any) => img.url) : [];
+        
+        return {
+            id: product.id,
+            name: product.name,
+            category: product.category,
+            images: imageUrls,
+            description: product.description || null
+        };
+    } catch (e) {
+        return null;
     }
-
-    // Sortujemy wyniki, aby znaleźć produkt z najpełniejszym zestawem zdjęć i EANem pasującym 1:1
-    const product = data.products.find((p: any) => p.gtins?.includes(ean)) || data.products[0];
-    
-    // Zdjęcia: Allegro zwraca listę, bierzemy wszystkie dostępne URL
-    const imageUrls: string[] = product.images ? product.images.map((img: any) => img.url) : [];
-
-    const parameters = product.parameters ? product.parameters.map((p: any) => {
-        const values = p.values.map((v: any) => v.value).join(', ');
-        return `${p.name}: ${values}`;
-    }) : [];
-
-    return {
-        id: product.id,
-        name: product.name,
-        category: product.category,
-        images: imageUrls,
-        parameters: parameters,
-        description: product.description || null
-    };
 };
 
 const uploadImageToAllegro = async (token: string, blob: Blob, isSandbox: boolean) => {
