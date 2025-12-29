@@ -443,9 +443,23 @@ export const App: React.FC = () => {
                     0%, 100% { background-position: 0% 50%; }
                     50% { background-position: 100% 50%; }
                 }
+                /* NEW ANIMATIONS FOR INTEGRATIONS */
+                @keyframes float-up {
+                    0%, 100% { transform: translateY(0); opacity: 1; }
+                    50% { transform: translateY(-5px); opacity: 0.8; }
+                }
+                @keyframes shake-cart {
+                    0%, 100% { transform: rotate(0deg) scale(1); }
+                    25% { transform: rotate(-5deg) scale(1.1); }
+                    75% { transform: rotate(5deg) scale(1.1); }
+                }
+                @keyframes download-bounce {
+                    0%, 100% { transform: translateY(0); }
+                    50% { transform: translateY(5px); }
+                }
            `}</style>
            <h2 className="text-3xl font-bold text-center text-white mb-10">Dostępne Funkcje</h2>
-           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+           <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-10">
                
                {/* 1. STL GENERATOR */}
                <div className="bg-slate-800/50 p-6 rounded-xl border border-gray-700 hover:border-cyan-500 transition-colors group cursor-default">
@@ -491,6 +505,58 @@ export const App: React.FC = () => {
                    <h3 className="text-xl font-bold text-white mb-2 group-hover:text-emerald-400 transition-colors">Generator EAN</h3>
                    <p className="text-gray-400 text-sm">Wpisz kod EAN, a system znajdzie zdjęcia produktu w sieci, zweryfikuje ich autentyczność, wyczyści tło i przygotuje pełną ofertę.</p>
                </div>
+           </div>
+
+           {/* NEW SECTION: INTEGRATIONS WITH ANIMATIONS */}
+           <div className="mt-16 pt-10 border-t border-gray-800 animate-fade-in">
+                <h2 className="text-3xl font-bold text-center text-white mb-10">Integracje i Eksport</h2>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    
+                    {/* ALLEGRO - Animation: Float Up + Glow */}
+                    <div className="group bg-slate-800/30 p-6 rounded-xl border border-orange-900/50 hover:border-orange-500 transition-colors flex items-start gap-4 hover:shadow-[0_0_15px_rgba(249,115,22,0.2)]">
+                        <div className="p-3 bg-orange-900/20 rounded-lg group-hover:bg-orange-900/40 transition-colors">
+                            <svg className="w-8 h-8 text-orange-500 group-hover:text-orange-400 group-hover:animate-[float-up_2s_ease-in-out_infinite]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" /></svg>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-white mb-1 group-hover:text-orange-400 transition-colors">Allegro</h3>
+                            <p className="text-sm text-gray-400">Bezpośrednia integracja API. Możesz wystawiać oferty jako szkice (Draft) lub publikować je natychmiastowo. Obsługa Sandbox oraz oficjalnych cenników dostaw.</p>
+                        </div>
+                    </div>
+
+                    {/* BASELINKER - Animation: Spin/Connect */}
+                    <div className="group bg-slate-800/30 p-6 rounded-xl border border-blue-900/50 hover:border-blue-500 transition-colors flex items-start gap-4 hover:shadow-[0_0_15px_rgba(59,130,246,0.2)]">
+                        <div className="p-3 bg-blue-900/20 rounded-lg group-hover:bg-blue-900/40 transition-colors">
+                            <svg className="w-8 h-8 text-blue-500 group-hover:text-blue-400 group-hover:animate-[spin_4s_linear_infinite]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-white mb-1 group-hover:text-blue-400 transition-colors">BaseLinker</h3>
+                            <p className="text-sm text-gray-400">Dodaj wygenerowany produkt prosto do katalogu BaseLinker. System automatycznie mapuje kategorie, magazyny i cenniki, umożliwiając dalszą dystrybucję.</p>
+                        </div>
+                    </div>
+
+                    {/* WOOCOMMERCE - Animation: Shake/Cart */}
+                    <div className="group bg-slate-800/30 p-6 rounded-xl border border-purple-900/50 hover:border-purple-500 transition-colors flex items-start gap-4 hover:shadow-[0_0_15px_rgba(168,85,247,0.2)]">
+                        <div className="p-3 bg-purple-900/20 rounded-lg group-hover:bg-purple-900/40 transition-colors">
+                            <svg className="w-8 h-8 text-purple-500 group-hover:text-purple-400 group-hover:animate-[shake-cart_0.5s_ease-in-out_infinite]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 11-4 0 2 2 0 014 0z" /></svg>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-white mb-1 group-hover:text-purple-400 transition-colors">WooCommerce</h3>
+                            <p className="text-sm text-gray-400">Wysyłaj gotowe produkty bezpośrednio do swojego sklepu na WordPress. Automatyczny upload zdjęć do biblioteki mediów i formatowanie opisu HTML.</p>
+                        </div>
+                    </div>
+
+                    {/* ZIP - Animation: Download Bounce */}
+                    <div className="group bg-slate-800/30 p-6 rounded-xl border border-teal-900/50 hover:border-teal-500 transition-colors flex items-start gap-4 hover:shadow-[0_0_15px_rgba(20,184,166,0.2)]">
+                        <div className="p-3 bg-teal-900/20 rounded-lg group-hover:bg-teal-900/40 transition-colors">
+                            <svg className="w-8 h-8 text-teal-500 group-hover:text-teal-400 group-hover:animate-[download-bounce_1s_ease-in-out_infinite]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-white mb-1 group-hover:text-teal-400 transition-colors">Paczka ZIP</h3>
+                            <p className="text-sm text-gray-400">Pobierz wszystko w jednej paczce: wygenerowane zdjęcia (PNG) oraz plik tekstowy z opisem aukcji, gotowe do ręcznego wykorzystania na dowolnej platformie.</p>
+                        </div>
+                    </div>
+
+                </div>
            </div>
       </div>
   );
