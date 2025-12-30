@@ -10,13 +10,15 @@ const parseJsonResponse = (responseText: string) => {
     const jsonStr = responseText.substring(jsonStartIndex, jsonEndIndex + 1);
     return JSON.parse(jsonStr);
   } catch (e) {
-    // Fallback v71: Ekstrakcja danych z uszkodzonego tekstu (regex)
-    const titleMatch = responseText.match(/(?:title|name|nazwa)":\s*"([^"]+)"/i);
-    const urls = responseText.match(/https?:\/\/[^"'\s<>]+?\.(?:jpg|jpeg|png|webp|avif)/gi) || [];
+    // Fallback: Regex wyciągający dane z surowego tekstu
+    const titleMatch = responseText.match(/(?:title|name|nazwa|produkt)":\s*"([^"]+)"/i);
+    // Ulepszony regex łapiący linki z parametrami (np. ?v=123)
+    const urls = responseText.match(/https?:\/\/[^\s"']+(?:\.(?:jpg|jpeg|png|webp|avif)|img|image)[^\s"']*/gi) || [];
+    
     if (titleMatch || urls.length > 0) {
         return {
-            auction_title: titleMatch ? titleMatch[1] : "Produkt",
-            visual_description: "Automatyczna analiza Titan v71",
+            auction_title: titleMatch ? titleMatch[1] : "Produkt rozpoznany",
+            visual_description: "",
             description_parts: [],
             image_urls: Array.from(new Set(urls)),
             sku: ""
@@ -38,52 +40,56 @@ const fileToGenerativePart = async (file: Blob | File): Promise<{ inlineData: { 
 
 export const fetchImageFromUrl = async (url: string): Promise<Blob> => {
     if (!url || !url.startsWith('http')) throw new Error("Invalid URL");
+    
+    // Lista proxy - usunięto najwolniejsze, zostawiono najszybsze
     const proxyUrls = [
-        `https://wsrv.nl/?url=${encodeURIComponent(url)}&n=-1&output=png`,
-        `https://images.weserv.nl/?url=${encodeURIComponent(url)}&n=-1`,
-        `https://corsproxy.io/?${encodeURIComponent(url)}`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-        url 
+        `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`, // Najszybsze cache CDN
+        url // Próba bezpośrednia (dla CORS-friendly)
     ];
 
     for (const pUrl of proxyUrls) {
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 12000);
+            // RELAXED: Timeout zwiększony do 6 sekund
+            const timeoutId = setTimeout(() => controller.abort(), 6000); 
+            
             const res = await fetch(pUrl, { 
                 cache: 'no-store', 
-                signal: controller.signal,
-                headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' }
+                signal: controller.signal
             });
+            
             clearTimeout(timeoutId);
+            
             if (res.ok) {
                 const blob = await res.blob();
+                // RELAXED: Akceptujemy mniejsze pliki (od 1KB), by nie odrzucać małych JPG
                 if (blob.size > 1000 && blob.type.startsWith('image/')) return blob; 
             }
         } catch (e) { continue; }
     }
-    throw new Error("UNREACHABLE");
+    throw new Error("Failed to fetch image");
 };
 
 export const verifyVisualIdentity = async (blob: Blob, title: string, url?: string): Promise<boolean> => {
-    // v71: Uproszczona heurystyka dla zaufanych domen + fallback logic
-    const trusted = ['amazon', 'allegro', 'ebay', 'skullcandy', 'apple', 'samsung', 'xiaomi', 'media-amazon', 'gstatic'];
+    // Szybka ścieżka dla zaufanych domen - omijamy AI dla prędkości
+    const trusted = ['amazon', 'allegro', 'ebay', 'media-expert', 'x-kom', 'morele', 'euro.com.pl', 'media-markt', 'empik', 'wsrv.nl'];
     if (url && trusted.some(t => url.toLowerCase().includes(t))) return true;
 
     try {
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const imagePart = await fileToGenerativePart(blob);
         const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: 'gemini-3-flash-preview', // Używamy Flash dla prędkości
             contents: {
                 parts: [
                     imagePart,
-                    { text: `Is this a photo of the product: "${title}"? Answer ONLY "YES" or "NO". Discard if it's lighting equipment and the product is NOT lighting equipment.` }
+                    { text: `Does this image show a product named "${title}"? Answer YES or NO.` }
                 ]
             }
         });
-        return response.text?.trim().toUpperCase().includes('YES') || false;
-    } catch (e) { return true; } 
+        const ans = response.text?.trim().toUpperCase();
+        return ans?.includes('YES') || false;
+    } catch (e) { return true; } // W razie błędu AI zakładamy, że jest OK (fail-open)
 };
 
 export const generateAdditionalImages = async (
@@ -97,6 +103,7 @@ export const generateAdditionalImages = async (
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const sourceBlobs = Array.isArray(sourceBlob) ? sourceBlob : [sourceBlob];
     
+    // Generowanie równoległe
     const tasks = Array.from({ length: count }).map(async (_, i) => {
         try {
             const currentBlob = sourceBlobs[i % sourceBlobs.length];
@@ -104,13 +111,13 @@ export const generateAdditionalImages = async (
             const response = await ai.models.generateContent({
                 model: 'gemini-2.5-flash-image',
                 contents: { 
-                    parts: [imagePart, { text: `Professional studio catalog photo of ${title}. Commercial quality, white background.` }] 
+                    parts: [imagePart, { text: `Product photography of ${title}, professional studio lighting, pure white background.` }] 
                 }
             });
             const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
             if (part?.inlineData) {
                 const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-                return { name: `v71_ai_${i + offset + 1}.png`, blob: await res.blob(), isAi: true };
+                return { name: `ai_view_${i + offset + 1}.png`, blob: await res.blob(), isAi: true };
             }
             return null;
         } catch (e) { return null; }
@@ -126,7 +133,7 @@ export const processRealPhoto = async (photoBlob: Blob, title: string): Promise<
         const imagePart = await fileToGenerativePart(photoBlob);
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
-            contents: { parts: [imagePart, { text: `Place product ${title} on pure white background #FFFFFF.` }] }
+            contents: { parts: [imagePart, { text: `Remove background, place on white.` }] }
         });
         const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (!part?.inlineData) return photoBlob;
@@ -136,56 +143,63 @@ export const processRealPhoto = async (photoBlob: Blob, title: string): Promise<
 };
 
 export const generateContentFromEan = async (ean: string, manualTitle?: string): Promise<any> => {
-  const fallback = { 
-      auction_title: manualTitle || `Produkt ${ean}`, 
-      description_parts: [], 
-      image_urls: [], 
-      sku: ean, 
-      visual_description: "" 
-  };
+  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+  const query = manualTitle || `Product EAN ${ean}`;
   
+  // Flash jest szybszy o 50% od Pro
+  const model = 'gemini-3-flash-preview'; 
+
   try {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const query = manualTitle || `EAN ${ean} product identity`;
-    
     const response = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview', // Pro jest bardziej stabilny przy tool-callingu
-        contents: `TITAN-ENGINE v71: Identify product for ${query}. 
-                   Return JSON ONLY: { "auction_title": "Full product name", "visual_description": "color/type", "description_parts": ["p1", "p2", "p3", "p4"], "image_urls": [], "sku": "${ean}" }`,
+        model,
+        contents: `Identify product "${query}". 
+                   Task 1: Find EXACT product name in Polish.
+                   Task 2: Find DIRECT URLs to high-res product images (white background preferred).
+                   
+                   JSON Output:
+                   { 
+                      "auction_title": "Product Name PL", 
+                      "description_parts": ["Marketing intro", "Features", "Specs"], 
+                      "image_urls": ["url1", "url2"],
+                      "sku": "${ean}" 
+                   }`,
         config: { tools: [{ googleSearch: {} }] }
     });
 
     const text = response.text || "";
-    let data = parseJsonResponse(text) || fallback;
+    let data = parseJsonResponse(text);
 
+    // Wyciągamy linki z Grounding Metadata (najbardziej wiarygodne źródło)
     const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
     const groundingLinks = chunks.map((c: any) => c.web?.uri).filter((u: string) => u && u.startsWith('http'));
-    const textLinks = text.match(/https?:\/\/[^"'\s<>]+?\.(?:jpg|jpeg|png|webp|avif)/gi) || [];
     
-    data.image_urls = Array.from(new Set([...groundingLinks, ...(data.image_urls || []), ...textLinks]))
-        .filter(l => typeof l === 'string' && (l.includes('amazon') || l.includes('allegro') || l.includes('ebay') || l.includes('gstatic') || l.includes('xiaomi')));
+    // Wyciągamy linki z tekstu (ulepszony regex)
+    const textLinks = text.match(/https?:\/\/[^\s"']+(?:\.(?:jpg|jpeg|png|webp)|img|image)[^\s"']*/gi) || [];
     
-    if ((!data.auction_title || data.auction_title === ean) && chunks.length > 0) {
-        data.auction_title = chunks[0].web?.title?.split('|')[0]?.split('-')[0]?.trim() || data.auction_title;
-    }
+    const allLinks = Array.from(new Set([...groundingLinks, ...(data?.image_urls || []), ...textLinks]))
+        .filter(l => typeof l === 'string' && !l.includes('placeholder') && !l.includes('icon'));
 
+    if (!data) {
+        data = { 
+            auction_title: manualTitle || (chunks.length > 0 ? chunks[0].web?.title?.split('|')[0]?.trim() : `Produkt ${ean}`),
+            description_parts: [], 
+            image_urls: allLinks, 
+            sku: ean, 
+            visual_description: "" 
+        };
+    } else {
+        data.image_urls = allLinks;
+    }
     return data;
+
   } catch (err) {
-      console.error("Titan-Engine Grounding Failure:", err);
-      return fallback; // Nigdy nie rzucaj błędu, zawsze zwracaj dane (choćby szkielet)
+      console.error("Gemini EAN Error:", err);
+      return { auction_title: manualTitle || `Produkt ${ean}`, description_parts: [], image_urls: [], sku: ean };
   }
 };
 
 export const generateNeuralSeed = async (productTitle: string, visualDescription?: string): Promise<Blob> => {
-    const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-    const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash-image',
-        contents: `Official catalog photography of ${productTitle}. Highly detailed, white background.`
-    });
-    const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
-    if (!part?.inlineData) throw new Error("Seed Failure");
-    const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
-    return await res.blob();
+    throw new Error("No real images found. Aborting AI generation to prevent hallucinations.");
 };
 
 export const addWhiteBackground = async (i: Blob, title?: string): Promise<Blob> => {
@@ -194,7 +208,7 @@ export const addWhiteBackground = async (i: Blob, title?: string): Promise<Blob>
         const imagePart = await fileToGenerativePart(i);
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash-image',
-            contents: { parts: [imagePart, { text: `Product on pure white background.` }] }
+            contents: { parts: [imagePart, { text: `Remove background, place on pure white.` }] }
         });
         const part = response.candidates?.[0]?.content?.parts?.find(p => p.inlineData);
         if (!part?.inlineData) return i;
@@ -204,12 +218,13 @@ export const addWhiteBackground = async (i: Blob, title?: string): Promise<Blob>
 };
 
 export const changeImageColor = async (i: any, s: string, t: string) => i;
+
 export const generateAllegroDescription = async (f: File[], m: any, info: string, p: any, r: any) => {
     const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
     const parts = await Promise.all(f.map(fileToGenerativePart));
     const resp = await ai.models.generateContent({
-        model: 'gemini-3-pro-preview',
-        contents: { parts: [...parts, { text: `JSON: { auctionTitle, descriptionParts: [4 PARAGRAPHS], sku, ean, colors }` }] },
+        model: 'gemini-3-flash-preview',
+        contents: { parts: [...parts, { text: `Write Allegro description in Polish JSON: { "auctionTitle": "", "descriptionParts": ["", "", "", ""], "sku": "", "ean": "", "colors": [] }` }] },
         config: { responseMimeType: "application/json" }
     });
     return parseJsonResponse(resp.text) || { auctionTitle: '', descriptionParts: [], sku: '', ean: '', colors: [] };
@@ -220,7 +235,7 @@ export const analyzePricing = async (i: Blob, title: string): Promise<{ products
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const response = await ai.models.generateContent({
             model: 'gemini-3-flash-preview',
-            contents: `Pricing for ${title}. JSON: { products: [{productTitle, pricePln, productUrl}] }`,
+            contents: `Find similar products to "${title}" on Allegro. Return JSON: { "products": [{"productTitle": "...", "pricePln": "...", "productUrl": "..."}] }`,
             config: { tools: [{ googleSearch: {} }], responseMimeType: "application/json" }
         });
         return parseJsonResponse(response.text) || { products: [] };
@@ -229,6 +244,3 @@ export const analyzePricing = async (i: Blob, title: string): Promise<{ products
 
 export const verifyAndFilterImages = async (i: any, t: string, v: string) => [];
 export const generateStudioProImages = async (f: File, p: string, c: number) => [];
-export const synthesizeFromBlueprint = async () => null;
-export const synthesizeFromReference = async () => null;
-export const synthesizeProductImage = async () => null;

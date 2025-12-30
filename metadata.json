@@ -1,5 +1,7 @@
 {
   "name": "Generator Opisów Aukcji 3D na Allegro",
   "description": "Aplikacja, która generuje profesjonalne, 4-akapitowe opisy produktów na Allegro na podstawie pliku modelu 3D (.stl, .3mf) i zdjęcia produktu (.jpg, .png). Opisy są zoptymalizowane pod kątem sprzedaży wydruków 3D.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "camera"
+  ]
 }

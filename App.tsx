@@ -1,3 +1,4 @@
+
 import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
@@ -58,6 +59,8 @@ export interface PrintCost {
   marginCost: number;
   totalCost: number;
 }
+
+const normalizeEan = (v: string) => (v || '').replace(/[^\d]/g, '').trim();
 
 export const App: React.FC = () => {
   // AUTH STATE
@@ -283,7 +286,7 @@ export const App: React.FC = () => {
       setAuctionTitle(title);
       setDescriptionParts(parts);
       setSku(gSku);
-      setEan(gEan || '');
+      setEan(normalizeEan(gEan || ''));
       setColors(gCols);
       
       setLoadingMessage('Stylizacja zdjęć przez AI...');
@@ -291,8 +294,8 @@ export const App: React.FC = () => {
 
       if (baseBlobs.length > 0 && bestForWhiteBg) {
           const whiteBgPromise = addWhiteBackground(bestForWhiteBg, title).catch(() => bestForWhiteBg);
-          const distinctAngles = baseBlobs.slice(0, 3); 
-          const aiGensPromise = generateAdditionalImages(distinctAngles, title, 3, imageStylePrompt, 0, backgroundIntensity);
+          // v72 Fix: always pass a single blob to ensure API consistency
+          const aiGensPromise = generateAdditionalImages(bestForWhiteBg, title, 3, imageStylePrompt, 0, backgroundIntensity);
           const [whiteBg, aiGens] = await Promise.all([whiteBgPromise, aiGensPromise]);
 
           if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg as Blob });
@@ -361,6 +364,7 @@ export const App: React.FC = () => {
   const handleExport = async (credentials: any) => {
     setExportStatus('exporting');
     setExportError(null);
+    const eanNorm = normalizeEan(ean);
     try {
       if (exportPlatform === 'allegro') {
           const allegroData = {
@@ -372,7 +376,7 @@ export const App: React.FC = () => {
               categoryId: credentials.categoryId,
               shippingRateId: credentials.shippingRateId,
               sku: sku,
-              ean: ean
+              ean: eanNorm
           };
           const offerResponse = await createAllegroDraft(credentials, allegroData);
           
@@ -387,7 +391,7 @@ export const App: React.FC = () => {
             descriptionParts: descriptionParts,
             images: selectedImages,
             sku: sku,
-            ean: ean,
+            ean: eanNorm,
             condition: productCondition,
             dimensions: dimensions,
             weight: weight
@@ -782,7 +786,7 @@ export const App: React.FC = () => {
                     {isLoading && <Loader message={loadingMessage} />}
                     {selectedImages.length > 0 && !isLoading && (
                         <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
-                        <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => d ? {...d, [a]: v*10} : null)} weight={weight} onWeightChange={setWeight} />
+                        <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => ({ ...(d || {x:0, y:0, z:0}), [a]: v * 10 }))} weight={weight} onWeightChange={setWeight} />
                         <SelectedImagesPreview 
                             images={selectedImages} 
                             onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} 

@@ -1,5 +1,5 @@
 
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { FileUpload } from './FileUpload';
 import { ImagePreview } from './ImagePreview';
 import { DescriptionOutput } from './DescriptionOutput';
@@ -24,6 +24,8 @@ interface SavedStyle {
     name: string;
     links: string;
 }
+
+const normalizeEan = (v: string) => (v || '').replace(/[^\d]/g, '').trim();
 
 export const PhotoGenerator: React.FC = () => {
   // AUTH STATE
@@ -145,7 +147,7 @@ export const PhotoGenerator: React.FC = () => {
     try {
       setLoadingMessage('Analizowanie zdjęć i generowanie opisu...');
       
-      const baseBlobs = imageFiles.map(f => new Blob([f], { type: f.type }));
+      const baseBlobs = imageFiles; // Files are Blobs, no need to wrap
       setBaseImageForAi(baseBlobs[0]);
 
       const { auctionTitle: title, descriptionParts: parts, sku: gSku, ean: gEan, colors: gCols } = await generateAllegroDescription(
@@ -159,7 +161,7 @@ export const PhotoGenerator: React.FC = () => {
       setAuctionTitle(title);
       setDescriptionParts(parts);
       setSku(gSku);
-      setEan(gEan || '');
+      setEan(normalizeEan(gEan || ''));
       setColors(gCols);
       
       setLoadingMessage('Stylizacja zdjęć przez AI...');
@@ -168,18 +170,40 @@ export const PhotoGenerator: React.FC = () => {
       if (baseBlobs.length > 0) {
           const mainImageBlob = baseBlobs[0];
           const whiteBgPromise = addWhiteBackground(mainImageBlob, title).catch(() => mainImageBlob);
-          const aiGensPromise = generateAdditionalImages([mainImageBlob], title, 3, imageStylePrompt, 0, backgroundIntensity);
+          
+          // Robust Error Handling for AI Generation
+          const aiGensPromise = generateAdditionalImages(mainImageBlob, title, 3, imageStylePrompt, 0, backgroundIntensity)
+            .catch((e: any) => {
+                console.error("generateAdditionalImages failed:", e);
+                return [];
+            });
+
           const [whiteBg, aiGens] = await Promise.all([whiteBgPromise, aiGensPromise]);
 
+          // DEBUG LOGS
+          console.log("base images:", baseBlobs.length);
+          console.log("whiteBg size:", (whiteBg as Blob)?.size);
+          console.log("ai images:", (aiGens || []).length);
+
           if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg as Blob });
-          finalGallery.push(...aiGens);
+          finalGallery.push(...(aiGens || []));
           
+          // Fallback: fill gallery with original images if AI didn't produce enough
           if (finalGallery.length < 4) {
              baseBlobs.forEach((blob, idx) => {
                  if (finalGallery.length < 4 && idx > 0) {
                      finalGallery.push({ name: `original_${idx}.png`, blob: blob });
                  }
              });
+          }
+
+          // HARD FALLBACK: If still < 4 (e.g. 1 uploaded, AI failed), clone the main image
+          while (finalGallery.length < 4 && finalGallery.length > 0) {
+              const source = finalGallery[0];
+              finalGallery.push({
+                  name: `fallback_${finalGallery.length + 1}.png`,
+                  blob: source.blob
+              });
           }
       }
       setSelectedImages(finalGallery.slice(0, 4));
@@ -221,6 +245,7 @@ export const PhotoGenerator: React.FC = () => {
   const handleExport = async (credentials: any) => {
     setExportStatus('exporting');
     setExportError(null);
+    const eanNorm = normalizeEan(ean);
     try {
       if (exportPlatform === 'allegro') {
              const allegroData = {
@@ -232,7 +257,7 @@ export const PhotoGenerator: React.FC = () => {
                   categoryId: credentials.categoryId,
                   shippingRateId: credentials.shippingRateId,
                   sku: sku,
-                  ean: ean
+                  ean: eanNorm
               };
               const offerResponse = await createAllegroDraft(credentials, allegroData);
               
@@ -246,7 +271,7 @@ export const PhotoGenerator: React.FC = () => {
             descriptionParts: descriptionParts,
             images: selectedImages,
             sku: sku,
-            ean: ean,
+            ean: eanNorm,
             condition: productCondition,
             dimensions: dimensions,
             weight: weight
@@ -423,7 +448,7 @@ export const PhotoGenerator: React.FC = () => {
 
         {selectedImages.length > 0 && !isLoading && (
             <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
-                <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => d ? {...d, [a]: v*10} : null)} weight={weight} onWeightChange={setWeight} />
+                <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => ({ ...(d || {x:0, y:0, z:0}), [a]: v * 10 }))} weight={weight} onWeightChange={setWeight} />
                 <SelectedImagesPreview 
                     images={selectedImages} 
                     onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} 
