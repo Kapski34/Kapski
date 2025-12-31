@@ -11,10 +11,11 @@ import { ExportModal, ExportPlatform } from './ExportModal';
 import { createAllegroDraft } from '../services/allegroService';
 import { exportToBaseLinker } from '../services/exportService';
 import { BarcodeScannerModal } from './BarcodeScannerModal';
+import { CsvExportModal } from './CsvExportModal'; // IMPORT CSV MODAL
 
-// Helper do metadanych obrazu (Quality Gate)
 const getImageMeta = (blob: Blob) =>
   new Promise<{ w: number; h: number }>((resolve, reject) => {
+    // REMOVED STRICT MIME CHECK: Proxies sometimes return application/octet-stream
     const url = URL.createObjectURL(blob);
     const img = new Image();
     img.onload = () => {
@@ -28,6 +29,27 @@ const getImageMeta = (blob: Blob) =>
     img.src = url;
   });
 
+const digitsOnly = (v: string) => (v || "").replace(/[^\d]/g, "").trim();
+
+const getEanVariants = (input: string) => {
+  const raw = digitsOnly(input);
+  const out: string[] = [];
+  if (/^\d{12}$/.test(raw)) { out.push(raw, "0" + raw); }
+  else if (/^\d{13}$/.test(raw)) { out.push(raw); if (raw.startsWith("0")) out.push(raw.slice(1)); }
+  // Fallback for others (e.g. 8 digits or invalid length but let API handle or fail)
+  if (out.length === 0 && raw.length > 0) out.push(raw);
+  return Array.from(new Set(out));
+};
+
+const quickSig = async (blob: Blob) => {
+  const a = blob.slice(0, 2048); // First 2KB
+  const buf = await a.arrayBuffer();
+  let sum = 0;
+  const u8 = new Uint8Array(buf);
+  for (let i = 0; i < u8.length; i += 29) sum = (sum * 33 + u8[i]) >>> 0;
+  return `${blob.size}-${sum}`;
+};
+
 export const EanGenerator: React.FC = () => {
     const { user, deductToken } = useAuth();
     const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
@@ -37,6 +59,9 @@ export const EanGenerator: React.FC = () => {
     const [isExportModalOpen, setIsExportModalOpen] = useState(false);
     const [exportPlatform, setExportPlatform] = useState<ExportPlatform | null>(null);
     const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'success' | 'error'>('idle');
+
+    // CSV Modal State
+    const [isCsvModalOpen, setIsCsvModalOpen] = useState<boolean>(false);
 
     const [ean, setEan] = useState('');
     const [manualTitle, setManualTitle] = useState('');
@@ -57,19 +82,42 @@ export const EanGenerator: React.FC = () => {
         setResult(null);
         
         try {
-            // ETAP 1: Wyszukiwanie EAN
-            setLoadingStep(`🔍 Identyfikacja produktu...`);
-            let aiData = await generateContentFromEan(ean, isManual ? manualTitle : undefined);
+            const eanVariants = isManual ? [] : getEanVariants(ean);
+            let aiData: any = null;
+
+            if (isManual) {
+                setLoadingStep(`🔎 Szukanie po nazwie...`);
+                aiData = await generateContentFromEan("", manualTitle);
+            } else {
+                 setLoadingStep(`🔍 Identyfikacja produktu...`);
+                 let lastErr: any = null;
+                 // Try variants
+                 for (const cand of eanVariants) {
+                    try {
+                        aiData = await generateContentFromEan(cand, undefined);
+                        if (aiData && aiData.auction_title) {
+                             setEan(cand);
+                             break;
+                        }
+                    } catch (e) { lastErr = e; }
+                 }
+                 if (!aiData) {
+                     throw lastErr || new Error("Nie udało się znaleźć produktu po EAN.");
+                 }
+            }
             
-            // ETAP 2: Search Chaining (Jeśli mamy tytuł, szukamy też po tytule)
+            // AGGRESSIVE SECONDARY SEARCH
             let extraUrls: string[] = [];
-            if (!isManual && aiData.auction_title && aiData.auction_title.length > 3) {
-                setLoadingStep(`🔎 Szukanie zdjęć dla "${aiData.auction_title}"...`);
+            const initialUrlCount = (aiData.image_urls || []).length;
+            
+            if (!isManual && aiData.auction_title && aiData.auction_title.length > 3 && initialUrlCount < 8) {
+                setLoadingStep(`🔎 Znaleziono "${aiData.auction_title}". Doszukiwanie zdjęć...`);
                 try {
-                    // Jeśli EAN nie dał zdjęć, szukaj po nazwie
                     const titleSearchData = await generateContentFromEan("", aiData.auction_title);
-                    if (titleSearchData.image_urls) extraUrls = titleSearchData.image_urls;
-                } catch (e) { }
+                    if (titleSearchData.image_urls && titleSearchData.image_urls.length > 0) {
+                        extraUrls = titleSearchData.image_urls;
+                    }
+                } catch (e) { console.warn("Extra search failed", e); }
             }
 
             setResult(aiData);
@@ -77,62 +125,123 @@ export const EanGenerator: React.FC = () => {
             const allUrlsRaw = [...(aiData.image_urls || []), ...extraUrls];
             const urls = Array.from(new Set(allUrlsRaw))
                 .filter((u): u is string => typeof u === 'string' && u.startsWith('http'))
-                .slice(0, 25); // Limitujemy do 25 URLi
+                .slice(0, 45); 
 
-            setLoadingStep(`🚀 Pobieranie zdjęć (${urls.length} źródeł)...`);
+            setLoadingStep(`🚀 Analiza ${urls.length} źródeł...`);
 
-            // WYŚCIG: Pobieramy równolegle
-            const goodImages: Blob[] = [];
-            const BATCH_SIZE = 5;
+            const validCandidates: { blob: Blob, w: number, h: number, sig: string }[] = [];
+            // Rejection now tracks reason: 'content' (wrong product) or 'size' (too small)
+            const rejectedCandidates: { blob: Blob, w: number, h: number, sig: string, rejectionReason: 'content' | 'size' }[] = [];
+            const seenSignatures = new Set<string>();
+            
+            // REDUCED BATCH SIZE to mitigate 429 Errors
+            const BATCH_SIZE = 3; 
 
-            // Przetwarzamy w małych paczkach
+            const MIN_SIZE = 150; 
+            const MAX_VISION_CHECKS = 8; // Increased check limit
+            let visionChecks = 0;
+
             for (let i = 0; i < urls.length; i += BATCH_SIZE) {
-                if (goodImages.length >= 4) break; 
+                if (validCandidates.length >= 4) break;
+                
+                // Add explicit delay between batches to respect rate limits
+                if (i > 0) await new Promise(r => setTimeout(r, 1000));
 
                 const batch = urls.slice(i, i + BATCH_SIZE);
                 const promises = batch.map(async (url) => {
                     try {
                         const blob = await fetchImageFromUrl(url);
-                        if (!blob || blob.size < 1000) return null; // Akceptujemy od 1KB
-
-                        const { w, h } = await getImageMeta(blob);
-                        // RELAXED QUALITY GATE: Min 200px (wcześniej 400px)
-                        if (w < 200 || h < 200) return null; 
+                        if (!blob) return null;
                         
-                        const ratio = w / h;
-                        // RELAXED RATIO: 0.3 - 3.0 (wcześniej 0.4 - 2.5)
-                        if (ratio > 3.0 || ratio < 0.3) return null;
+                        const sig = await quickSig(blob);
+                        if (seenSignatures.has(sig)) return null; 
 
-                        return blob;
+                        let meta;
+                        try {
+                             meta = await getImageMeta(blob);
+                             if (meta.w < 20 || meta.h < 20) return null; 
+                        } catch (e) { return null; }
+
+                        let rejectionReason: 'content' | 'size' | null = null;
+
+                        if (meta.w < MIN_SIZE || meta.h < MIN_SIZE) {
+                            rejectionReason = 'size';
+                        } else if (validCandidates.length < 5 && visionChecks < MAX_VISION_CHECKS) {
+                             visionChecks++;
+                             const isCorrectProduct = await verifyVisualIdentity(blob, aiData.auction_title, url);
+                             if (!isCorrectProduct) {
+                                 console.warn("AI rejected image content", url);
+                                 rejectionReason = 'content';
+                             }
+                        }
+
+                        return { blob, ...meta, sig, rejectionReason };
                     } catch (e) { return null; }
                 });
 
-                const batchResults = await Promise.all(promises);
-                const validBlobs = batchResults.filter((b): b is Blob => b !== null);
-                
-                // Deduplikacja
-                for (const blob of validBlobs) {
-                    if (!goodImages.some(existing => Math.abs(existing.size - blob.size) < 100)) {
-                        goodImages.push(blob);
+                const results = await Promise.all(promises);
+                results.forEach(res => {
+                    if (res) {
+                        seenSignatures.add(res.sig);
+                        if (res.rejectionReason) {
+                            rejectedCandidates.push({ ...res, rejectionReason: res.rejectionReason });
+                        } else {
+                            validCandidates.push(res);
+                        }
                     }
+                });
+                
+                if (validCandidates.length > 0) {
+                     setLoadingStep(`Znaleziono ${validCandidates.length} pasujących zdjęć...`);
                 }
             }
 
-            if (goodImages.length === 0) {
-                 throw new Error("Nie znaleziono wiarygodnych zdjęć produktu. Spróbuj wyszukać po nazwie lub wgraj zdjęcie ręcznie.");
+            // FALLBACK STRATEGY: ULTIMATE DESPERATION
+            if (validCandidates.length === 0 && rejectedCandidates.length > 0) {
+                 console.warn("AI rejected all images. Engaging ultimate fallback.");
+                 
+                 // 1. Sort all rejects by size (biggest first)
+                 rejectedCandidates.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+
+                 // 2. Filter out tiny icons (<50px) unless that's all we have
+                 const viableRejects = rejectedCandidates.filter(c => c.w > 50 && c.h > 50);
+
+                 if (viableRejects.length > 0) {
+                     // Take the largest viable image regardless of rejection reason
+                     validCandidates.push(viableRejects[0]);
+                     // Add up to 3 more if available
+                     validCandidates.push(...viableRejects.slice(1, 4));
+                 } else {
+                     // If everything is tiny, take the largest tiny one
+                     validCandidates.push(rejectedCandidates[0]);
+                 }
             }
 
-            // Mamy realne zdjęcia.
-            setSourceInfo(`Znaleziono: ${goodImages.length} oryginałów`);
-            setLoadingStep(`🎨 Retusz zdjęć...`);
+            if (validCandidates.length === 0) {
+                 if (urls.length === 0) {
+                     throw new Error("AI nie znalazło żadnych linków do zdjęć dla tego produktu. Spróbuj wyszukać po nazwie.");
+                 } else {
+                     throw new Error(`Znaleziono ${urls.length} źródeł, ale nie udało się pobrać żadnego zdjęcia. Prawdopodobnie blokady regionalne lub błędy sieci.`);
+                 }
+            }
+
+            // Sortowanie: Największe na początek (jeśli jeszcze nie posortowane)
+            validCandidates.sort((a, b) => (b.w * b.h) - (a.w * a.h));
+
+            // Use whatever we found, even if it's just 1 or 2 good images. 
+            // Better to show 2 good ones than 2 good + 1 incorrect one.
+            const goodImages = validCandidates.slice(0, 4).map(c => c.blob);
+            
+            setSourceInfo(`Źródło: ${validCandidates.length} obrazów`);
+            setLoadingStep(`🎨 Generowanie galerii...`);
 
             const gallery: { name: string; blob: Blob; isAi?: boolean }[] = [];
 
-            // 1. Główne zdjęcie (pierwsze znalezione) - usuwamy tło
+            // 1. Główne zdjęcie
             const mainBlob = await processRealPhoto(goodImages[0], aiData.auction_title);
             gallery.push({ name: 'main_product.png', blob: mainBlob, isAi: false });
 
-            // 2. Reszta znalezionych zdjęć (do 3 sztuk)
+            // 2. Reszta oryginałów
             const remaining = goodImages.slice(1, 4);
             const processedRemaining = await Promise.all(remaining.map(async (blob, idx) => {
                 const clean = await processRealPhoto(blob, aiData.auction_title);
@@ -140,37 +249,31 @@ export const EanGenerator: React.FC = () => {
             }));
             gallery.push(...processedRemaining);
 
-            // 3. Jeśli brakuje do 4, klonujemy lub dorabiamy AI (tylko Image-to-Image)
+            // 3. Generowanie wariantów AI - tylko jeśli mamy mało oryginałów
             if (gallery.length < 4) {
-                setLoadingStep(`✨ Generowanie wariantów (brakujące ${4 - gallery.length})...`);
-                try {
-                    const extra = await generateAdditionalImages(
-                        gallery[0].blob, 
-                        aiData.auction_title, 
-                        4 - gallery.length, 
-                        "", 
-                        gallery.length
-                    );
-                    gallery.push(...extra);
-                } catch (e) { console.warn("AI variants failed", e); }
-                
-                // Ostateczny fallback: powielenie oryginałów jeśli AI zawiedzie
-                while (gallery.length < 4 && goodImages.length > 0) {
-                    const source = goodImages[gallery.length % goodImages.length];
-                    gallery.push({ 
-                        name: `fallback_${gallery.length + 1}.png`, 
-                        blob: source,
-                        isAi: false 
-                    });
+                setLoadingStep(`✨ Tworzenie nowych ujęć 3D...`);
+                const needed = 4 - gallery.length;
+                // Generate explicitly from the BEST image (index 0)
+                for (let k = 0; k < needed; k++) {
+                    try {
+                        const one = await generateAdditionalImages(
+                            gallery[0].blob,
+                            aiData.auction_title,
+                            1,
+                            "",
+                            gallery.length + k // Unique offset
+                        );
+                        if (one && one.length > 0) gallery.push(one[0]);
+                    } catch (e) { console.warn("AI extra img failed", e); }
                 }
             }
 
-            setAiImages(gallery.slice(0, 4));
+            setAiImages(gallery);
             deductToken(1);
 
         } catch (err: any) {
             console.error(err);
-            setError(err.message || "Nie znaleziono produktu.");
+            setError(err.message || "Błąd wyszukiwania.");
         } finally {
             setIsLoading(false);
         }
@@ -205,7 +308,7 @@ export const EanGenerator: React.FC = () => {
                     <h2 className="text-4xl font-bold text-white tracking-tight">Generator EAN</h2>
                     <span className="bg-emerald-500/20 text-emerald-400 text-[10px] font-bold px-2 py-1 rounded border border-emerald-500/30 uppercase tracking-tighter">Fast-Check v2</span>
                 </div>
-                <p className="text-gray-400 italic font-medium tracking-wide text-sm">Szybkie wyszukiwanie + Retusz AI (Bez halucynacji)</p>
+                <p className="text-gray-400 italic font-medium tracking-wide text-sm">Szybkie wyszukiwanie + Weryfikacja wizualna AI</p>
                 <button onClick={handleSelectKey} className="mt-4 text-[10px] text-gray-500 hover:text-emerald-400 transition-colors">Klucz API</button>
             </div>
 
@@ -262,7 +365,8 @@ export const EanGenerator: React.FC = () => {
                     <DescriptionOutput auctionTitle={result.auction_title} descriptionParts={result.description_parts} sku={result.sku} ean={ean} onEanChange={setEan} colors={[]} condition="new" dimensions={null} weight={null} onDimensionsChange={()=>{}} onWeightChange={()=>{}} />
 
                     <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8 border-t border-slate-800">
-                        <button onClick={() => {setExportPlatform('baselinker'); setIsExportModalOpen(true);}} className="px-10 py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-xl transition-all transform hover:scale-105">Eksportuj do BaseLinker</button>
+                        <button onClick={() => setIsCsvModalOpen(true)} className="px-10 py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-xl transition-all transform hover:scale-105">Pobierz plik .csv</button>
+                        <button onClick={() => {setExportPlatform('baselinker'); setIsExportModalOpen(true);}} className="px-10 py-4 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-xl transition-all transform hover:scale-105">Eksportuj do BaseLinker</button>
                         <button onClick={() => {setExportPlatform('allegro'); setIsExportModalOpen(true);}} className="px-10 py-4 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-xl shadow-xl transition-all transform hover:scale-105">Wystaw na Allegro</button>
                     </div>
                 </div>
@@ -276,6 +380,29 @@ export const EanGenerator: React.FC = () => {
 
             <AuthModal isOpen={isAuthModalOpen} onClose={() => setIsAuthModalOpen(false)} />
             <TokenStore isOpen={isTokenStoreOpen} onClose={() => setIsTokenStoreOpen(false)} />
+            
+            <CsvExportModal 
+                isOpen={isCsvModalOpen} 
+                onClose={() => setIsCsvModalOpen(false)} 
+                imageBlobs={aiImages}
+                data={{
+                    title: result?.auction_title || '',
+                    sku: result?.sku || '',
+                    ean: ean,
+                    condition: 'Nowy',
+                    colors: '',
+                    width: '',
+                    height: '',
+                    depth: '',
+                    weight: '',
+                    description_main: result?.description_parts?.[0] || '',
+                    description_extra1: result?.description_parts?.[1] || '',
+                    description_extra2: result?.description_parts?.[2] || '',
+                    description_extra3: result?.description_parts?.[3] || '',
+                    images: aiImages.map(img => img.name).join('|')
+                }}
+            />
+
             {isExportModalOpen && exportPlatform && (
                 <ExportModal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} platform={exportPlatform} onExport={handleExport} status={exportStatus} error={null} />
             )}

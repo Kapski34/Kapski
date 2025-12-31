@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { FileUpload } from './components/FileUpload';
@@ -17,6 +16,7 @@ import { PrintCostEstimator } from './components/PrintCostEstimator';
 import { VirtualStudio } from './components/VirtualStudio';
 import { EanGenerator } from './components/EanGenerator';
 import { PhotoGenerator } from './components/PhotoGenerator';
+import { CsvExportModal } from './components/CsvExportModal'; // IMPORT CSV MODAL
 
 // AUTH IMPORTS
 import { useAuth } from './contexts/AuthContext';
@@ -103,6 +103,9 @@ export const App: React.FC = () => {
   const [exportPlatform, setExportPlatform] = useState<ExportPlatform | null>(null);
   const [exportStatus, setExportStatus] = useState<ExportStatus>('idle');
   const [exportError, setExportError] = useState<string | null>(null);
+  
+  // CSV Modal State
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState<boolean>(false);
 
   const [costAnalysisStatus, setCostAnalysisStatus] = useState<Status>('idle');
   const [costAnalysisResult, setCostAnalysisResult] = useState<CostAnalysisResult | null>(null);
@@ -447,7 +450,6 @@ export const App: React.FC = () => {
                     0%, 100% { background-position: 0% 50%; }
                     50% { background-position: 100% 50%; }
                 }
-                /* NEW ANIMATIONS FOR INTEGRATIONS */
                 @keyframes float-up {
                     0%, 100% { transform: translateY(0); opacity: 1; }
                     50% { transform: translateY(-5px); opacity: 0.8; }
@@ -555,7 +557,7 @@ export const App: React.FC = () => {
                             <svg className="w-8 h-8 text-teal-500 group-hover:text-teal-400 group-hover:animate-[download-bounce_1s_ease-in-out_infinite]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" /></svg>
                         </div>
                         <div>
-                            <h3 className="text-lg font-bold text-white mb-1 group-hover:text-teal-400 transition-colors">Paczka ZIP</h3>
+                            <h3 className="text-lg font-bold text-white mb-1 group-hover:text-teal-400 transition-colors">Paczka ZIP / CSV</h3>
                             <p className="text-sm text-gray-400">Pobierz wszystko w jednej paczce: wygenerowane zdjęcia (PNG) oraz plik tekstowy z opisem aukcji, gotowe do ręcznego wykorzystania na dowolnej platformie.</p>
                         </div>
                     </div>
@@ -786,7 +788,7 @@ export const App: React.FC = () => {
                     {isLoading && <Loader message={loadingMessage} />}
                     {selectedImages.length > 0 && !isLoading && (
                         <div className="mt-10 pt-8 border-t border-cyan-500/20 space-y-10">
-                        <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => ({ ...(d || {x:0, y:0, z:0}), [a]: v * 10 }))} weight={weight} onWeightChange={setWeight} />
+                        <DescriptionOutput auctionTitle={auctionTitle} descriptionParts={descriptionParts} sku={sku} ean={ean} onEanChange={setEan} colors={colors} condition={productCondition} dimensions={dimensions} onDimensionsChange={(a, v) => setDimensions(d => d ? {...d, [a]: v*10} : null)} weight={weight} onWeightChange={setWeight} />
                         <SelectedImagesPreview 
                             images={selectedImages} 
                             onImageUpdate={(n, b) => setSelectedImages(imgs => imgs.map(i => i.name === n ? {name: n, blob: b} : i))} 
@@ -799,6 +801,7 @@ export const App: React.FC = () => {
                         </div>
                         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
                             <button onClick={handleDownloadPackage} disabled={isPackaging} className="px-8 py-3 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-lg shadow-lg transition-all">Pobierz pakiet .zip</button>
+                            <button onClick={() => setIsCsvModalOpen(true)} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg shadow-lg">Pobierz plik .csv</button>
                             <button onClick={() => {setExportPlatform('baselinker'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow-lg">Eksportuj do BaseLinker</button>
                             <button onClick={() => {setExportPlatform('allegro'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-lg shadow-lg">Wystaw na Allegro</button>
                         </div>
@@ -808,6 +811,31 @@ export const App: React.FC = () => {
                 )}
             </>
         )}
+
+        {/* --- MODALS --- */}
+        
+        {/* CSV Modal */}
+        <CsvExportModal 
+            isOpen={isCsvModalOpen} 
+            onClose={() => setIsCsvModalOpen(false)} 
+            imageBlobs={selectedImages}
+            data={{
+                title: auctionTitle,
+                sku: sku,
+                ean: ean,
+                colors: colors.join(', '),
+                condition: productCondition === 'new' ? 'Nowy' : 'Używany',
+                weight: weight ? weight.toString() : '',
+                width: dimensions ? (dimensions.x / 10).toFixed(2) : '', // mm to cm, rounded to 2 decimals
+                height: dimensions ? (dimensions.y / 10).toFixed(2) : '', // mm to cm, rounded to 2 decimals
+                depth: dimensions ? (dimensions.z / 10).toFixed(2) : '', // mm to cm, rounded to 2 decimals
+                description_main: descriptionParts[0] || '',
+                description_extra1: descriptionParts[1] || '',
+                description_extra2: descriptionParts[2] || '',
+                description_extra3: descriptionParts[3] || '',
+                images: selectedImages.map(img => img.name).join('|')
+            }}
+        />
 
         {isExportModalOpen && (
           <ExportModal 

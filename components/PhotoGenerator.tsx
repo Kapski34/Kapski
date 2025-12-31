@@ -11,6 +11,7 @@ import { exportToWooCommerce, exportToBaseLinker } from '../services/exportServi
 import { CostAnalysis, CostAnalysisResult } from './CostAnalysis';
 import { BackgroundIntensity, PersonalityType, ModelDimensions } from '../App';
 import { createAllegroDraft, publishOffer } from '../services/allegroService';
+import { CsvExportModal } from './CsvExportModal'; // IMPORT CSV MODAL
 
 // AUTH IMPORTS
 import { useAuth } from '../contexts/AuthContext';
@@ -62,6 +63,9 @@ export const PhotoGenerator: React.FC = () => {
   const [exportPlatform, setExportPlatform] = useState<ExportPlatform | null>(null);
   const [exportStatus, setExportStatus] = useState<'idle' | 'exporting' | 'success' | 'error'>('idle');
   const [exportError, setExportError] = useState<string | null>(null);
+  
+  // CSV Modal State
+  const [isCsvModalOpen, setIsCsvModalOpen] = useState<boolean>(false);
 
   const [costAnalysisStatus, setCostAnalysisStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [costAnalysisResult, setCostAnalysisResult] = useState<CostAnalysisResult | null>(null);
@@ -171,7 +175,7 @@ export const PhotoGenerator: React.FC = () => {
           const mainImageBlob = baseBlobs[0];
           const whiteBgPromise = addWhiteBackground(mainImageBlob, title).catch(() => mainImageBlob);
           
-          // Robust Error Handling for AI Generation
+          // Initial AI Generation attempt (parallel)
           const aiGensPromise = generateAdditionalImages(mainImageBlob, title, 3, imageStylePrompt, 0, backgroundIntensity)
             .catch((e: any) => {
                 console.error("generateAdditionalImages failed:", e);
@@ -179,11 +183,6 @@ export const PhotoGenerator: React.FC = () => {
             });
 
           const [whiteBg, aiGens] = await Promise.all([whiteBgPromise, aiGensPromise]);
-
-          // DEBUG LOGS
-          console.log("base images:", baseBlobs.length);
-          console.log("whiteBg size:", (whiteBg as Blob)?.size);
-          console.log("ai images:", (aiGens || []).length);
 
           if (whiteBg) finalGallery.push({ name: 'main_product.png', blob: whiteBg as Blob });
           finalGallery.push(...(aiGens || []));
@@ -197,13 +196,27 @@ export const PhotoGenerator: React.FC = () => {
              });
           }
 
-          // HARD FALLBACK: If still < 4 (e.g. 1 uploaded, AI failed), clone the main image
-          while (finalGallery.length < 4 && finalGallery.length > 0) {
-              const source = finalGallery[0];
-              finalGallery.push({
-                  name: `fallback_${finalGallery.length + 1}.png`,
-                  blob: source.blob
-              });
+          // IMPROVED FALLBACK: Try to generate images one by one if still missing
+          if (finalGallery.length < 4) {
+              const needed = 4 - finalGallery.length;
+              for (let k = 0; k < needed; k++) {
+                  try {
+                      // Generate 1 image with specific offset
+                      const results = await generateAdditionalImages(
+                          baseBlobs[0], 
+                          title, 
+                          1, 
+                          imageStylePrompt, 
+                          k, // offset 0, 1, 2... for different angles
+                          backgroundIntensity
+                      );
+                      if (results.length > 0) {
+                          finalGallery.push(results[0]);
+                      }
+                  } catch (e) {
+                      console.warn("AI gen failed for index", k, e);
+                  }
+              }
           }
       }
       setSelectedImages(finalGallery.slice(0, 4));
@@ -460,11 +473,35 @@ export const PhotoGenerator: React.FC = () => {
                 </div>
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-8">
                     <button onClick={handleDownloadPackage} disabled={isPackaging} className="px-8 py-3 bg-teal-600 hover:bg-teal-500 text-white font-bold rounded-lg shadow-lg transition-all">Pobierz pakiet .zip</button>
+                    <button onClick={() => setIsCsvModalOpen(true)} className="px-8 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg shadow-lg">Pobierz plik .csv</button>
                     <button onClick={() => {setExportPlatform('baselinker'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-lg shadow-lg">Eksportuj do BaseLinker</button>
                      <button onClick={() => {setExportPlatform('allegro'); setIsExportModalOpen(true);}} className="px-8 py-3 bg-orange-600 hover:bg-orange-500 text-white font-bold rounded-lg shadow-lg">Wystaw na Allegro</button>
                 </div>
             </div>
         )}
+
+        {/* CSV Modal */}
+        <CsvExportModal 
+            isOpen={isCsvModalOpen} 
+            onClose={() => setIsCsvModalOpen(false)} 
+            imageBlobs={selectedImages}
+            data={{
+                title: auctionTitle,
+                sku: sku,
+                ean: ean,
+                colors: colors.join(', '),
+                condition: productCondition === 'new' ? 'Nowy' : 'Używany',
+                weight: weight ? weight.toString() : '',
+                width: dimensions ? (dimensions.x / 10).toFixed(2) : '',
+                height: dimensions ? (dimensions.y / 10).toFixed(2) : '',
+                depth: dimensions ? (dimensions.z / 10).toFixed(2) : '',
+                description_main: descriptionParts[0] || '',
+                description_extra1: descriptionParts[1] || '',
+                description_extra2: descriptionParts[2] || '',
+                description_extra3: descriptionParts[3] || '',
+                images: selectedImages.map(img => img.name).join('|')
+            }}
+        />
 
         {isExportModalOpen && exportPlatform && (
           <ExportModal 
