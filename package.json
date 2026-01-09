@@ -15,6 +15,7 @@
     "@capacitor/core": "^6.0.0",
     "@google/genai": "*",
     "firebase": "^10.12.0",
+    "html5-qrcode": "^2.3.8",
     "jszip": "^3.10.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
