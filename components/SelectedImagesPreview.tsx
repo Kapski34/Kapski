@@ -2,8 +2,15 @@
 import React, { useState, useEffect } from 'react';
 import { addWhiteBackground, changeImageColor } from '../services/geminiService';
 
+export interface ImageItem {
+    name: string;
+    blob?: Blob;
+    url?: string;
+    isAi?: boolean;
+}
+
 interface SelectedImagesPreviewProps {
-  images: { name: string; blob: Blob }[];
+  images: ImageItem[];
   onImageUpdate: (originalName: string, newBlob: Blob) => void;
   onColorChange: (updatedImages: { name: string; blob: Blob }[]) => Promise<void>;
   onRegenerate?: (index: number) => Promise<void>;
@@ -28,6 +35,17 @@ const BASIC_COLORS = [
   { name: 'Błękitny', hex: '#38BDF8' },
 ];
 
+const toProxyUrl = (u: string) => {
+  if (!u) return '';
+  if (u.startsWith('blob:')) return u;
+  if (!/^https?:\/\//i.test(u)) return '';
+  if (u.includes('images.weserv.nl') || u.includes('wsrv.nl')) return u;
+
+  // weserv requires URL without protocol, encoded
+  const clean = u.replace(/^https?:\/\//, '');
+  return `https://images.weserv.nl/?url=${encodeURIComponent(clean)}&w=1200&fit=inside`;
+};
+
 export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ images, onImageUpdate, onColorChange, onRegenerate }) => {
   const [downloadingImage, setDownloadingImage] = useState<string | null>(null);
   const [processingImages, setProcessingImages] = useState<string[]>([]);
@@ -45,30 +63,40 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
   useEffect(() => {
     const newImageUrls: Record<string, string> = {};
     images.forEach(image => {
-        newImageUrls[image.name] = URL.createObjectURL(image.blob);
+        if (image.blob) {
+            newImageUrls[image.name] = URL.createObjectURL(image.blob);
+        } else if (image.url) {
+            newImageUrls[image.name] = toProxyUrl(image.url);
+        }
     });
     setImageUrls(newImageUrls);
 
     return () => {
-        Object.values(newImageUrls).forEach(url => URL.revokeObjectURL(url));
+        // Only revoke object URLs we created (blobs)
+        Object.entries(newImageUrls).forEach(([name, url]) => {
+            if (url.startsWith('blob:')) URL.revokeObjectURL(url);
+        });
     };
   }, [images]);
 
-  const handleDownload = async (image: { name: string; blob: Blob }) => {
+  const handleDownload = async (image: ImageItem) => {
     if (processingImages.length > 0 || downloadingImage || colorReplaceState) return;
+    
+    const srcUrl = image.blob ? URL.createObjectURL(image.blob) : (imageUrls[image.name] || toProxyUrl(image.url || ''));
+    if (!srcUrl) return;
+
     setDownloadingImage(image.name);
     try {
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       if (!ctx) throw new Error('Nie można uzyskać kontekstu canvas.');
       const img = new Image();
-      img.crossOrigin = "anonymous"; // v60: Fix dla CORS przy pobieraniu
+      img.crossOrigin = "anonymous"; 
       
-      const objectUrl = URL.createObjectURL(image.blob);
       await new Promise<void>((resolve, reject) => {
-        img.onload = () => { URL.revokeObjectURL(objectUrl); resolve(); };
-        img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error(`Nie można załadować obrazu`)); };
-        img.src = objectUrl;
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error(`Nie można załadować obrazu`));
+        img.src = srcUrl;
       });
 
       canvas.width = img.naturalWidth;
@@ -86,16 +114,24 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
         link.click();
         document.body.removeChild(link);
         URL.revokeObjectURL(pngUrl);
+        
+        if (image.blob) URL.revokeObjectURL(srcUrl); // Revoke only if we created it here
         setDownloadingImage(null);
       }, 'image/png', 1.0);
     } catch (error) { 
+        console.error(error);
+        if (image.blob) URL.revokeObjectURL(srcUrl!);
         setDownloadingImage(null);
-        setEditError("Błąd pobierania zdjęcia.");
+        setEditError("Błąd pobierania zdjęcia. Obraz może być chroniony przez CORS.");
     }
   };
 
-  const handleAddWhiteBg = async (image: { name: string; blob: Blob }) => {
+  const handleAddWhiteBg = async (image: ImageItem) => {
     if (processingImages.length > 0 || downloadingImage || colorReplaceState) return;
+    if (!image.blob) {
+        setEditError("Opcja niedostępna - zdjęcie nie zostało w pełni pobrane (brak Blob).");
+        return;
+    }
     setProcessingImages([image.name]);
     setEditError(null);
     try {
@@ -125,7 +161,7 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
     setColorReplaceState({ stage: 'selecting-source', imageName: imageName });
   };
 
-  const handleSourceColorSelect = async (event: React.MouseEvent<HTMLImageElement>, image: { name: string; blob: Blob }) => {
+  const handleSourceColorSelect = async (event: React.MouseEvent<HTMLImageElement>, image: ImageItem) => {
     if (!colorReplaceState || colorReplaceState.stage !== 'selecting-source' || colorReplaceState.imageName !== image.name) return;
     const imgElement = event.currentTarget;
     const canvas = document.createElement('canvas');
@@ -133,54 +169,65 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
     canvas.height = imgElement.naturalHeight;
     const ctx = canvas.getContext('2d', { willReadFrequently: true });
     if (!ctx) return;
-    ctx.drawImage(imgElement, 0, 0, imgElement.naturalWidth, imgElement.naturalHeight);
-    const rect = imgElement.getBoundingClientRect();
-    const naturalWidth = imgElement.naturalWidth;
-    const naturalHeight = imgElement.naturalHeight;
-    const clientWidth = rect.width;
-    const clientHeight = rect.height;
-    const naturalRatio = naturalWidth / naturalHeight;
-    const clientRatio = clientWidth / clientHeight;
-    let renderedWidth, renderedHeight, offsetX = 0, offsetY = 0;
-    if (naturalRatio > clientRatio) {
-        renderedHeight = clientHeight;
-        renderedWidth = renderedHeight * naturalRatio;
-        offsetX = (clientWidth - renderedWidth) / 2;
-    } else {
-        renderedWidth = clientWidth;
-        renderedHeight = renderedWidth / naturalRatio;
-        offsetY = (clientHeight - renderedHeight) / 2;
+    
+    try {
+        ctx.drawImage(imgElement, 0, 0, imgElement.naturalWidth, imgElement.naturalHeight);
+        const rect = imgElement.getBoundingClientRect();
+        const naturalWidth = imgElement.naturalWidth;
+        const naturalHeight = imgElement.naturalHeight;
+        const clientWidth = rect.width;
+        const clientHeight = rect.height;
+        const naturalRatio = naturalWidth / naturalHeight;
+        const clientRatio = clientWidth / clientHeight;
+        let renderedWidth, renderedHeight, offsetX = 0, offsetY = 0;
+        if (naturalRatio > clientRatio) {
+            renderedHeight = clientHeight;
+            renderedWidth = renderedHeight * naturalRatio;
+            offsetX = (clientWidth - renderedWidth) / 2;
+        } else {
+            renderedWidth = clientWidth;
+            renderedHeight = renderedWidth / naturalRatio;
+            offsetY = (clientHeight - renderedHeight) / 2;
+        }
+        const clickX = event.clientX - rect.left;
+        const clickY = event.clientY - rect.top;
+        if (clickX < offsetX || clickX > offsetX + renderedWidth || clickY < offsetY || clickY > offsetY + renderedHeight) return;
+        const relativeX = clickX - offsetX;
+        const relativeY = clickY - offsetY;
+        const canvasX = (relativeX / renderedWidth) * naturalWidth;
+        const canvasY = (relativeY / renderedHeight) * naturalHeight;
+        const pixel = ctx.getImageData(canvasX, canvasY, 1, 1).data;
+        const toHex = (c: number) => ('0' + c.toString(16)).slice(-2);
+        const sourceColorHex = `#${toHex(pixel[0])}${toHex(pixel[1])}${toHex(pixel[2])}`;
+        setColorReplaceState({ ...colorReplaceState, stage: 'selecting-target', sourceColor: sourceColorHex });
+    } catch (e) {
+        setEditError("Nie można pobrać koloru - obraz chroniony (CORS).");
+        console.error(e);
+        setColorReplaceState(null);
     }
-    const clickX = event.clientX - rect.left;
-    const clickY = event.clientY - rect.top;
-    if (clickX < offsetX || clickX > offsetX + renderedWidth || clickY < offsetY || clickY > offsetY + renderedHeight) return;
-    const relativeX = clickX - offsetX;
-    const relativeY = clickY - offsetY;
-    const canvasX = (relativeX / renderedWidth) * naturalWidth;
-    const canvasY = (relativeY / renderedHeight) * naturalHeight;
-    const pixel = ctx.getImageData(canvasX, canvasY, 1, 1).data;
-    const toHex = (c: number) => ('0' + c.toString(16)).slice(-2);
-    const sourceColorHex = `#${toHex(pixel[0])}${toHex(pixel[1])}${toHex(pixel[2])}`;
-    setColorReplaceState({ ...colorReplaceState, stage: 'selecting-target', sourceColor: sourceColorHex });
   };
   
   const handleApplyColorChange = async (newTargetColor: string) => {
     const sourceColor = colorReplaceState?.sourceColor;
     const initiatingImageName = colorReplaceState?.imageName;
     if (!sourceColor || !initiatingImageName || processingImages.length > 0) return;
-    const imagesToProcess = applyToAll ? images : images.filter(img => img.name === initiatingImageName);
+    
+    const imagesToProcess = (applyToAll ? images : images.filter(img => img.name === initiatingImageName))
+        .filter(img => img.blob !== undefined) as { name: string; blob: Blob }[];
+
+    if (imagesToProcess.length === 0) {
+        setEditError("Brak pobranych obrazów (Blob) do edycji.");
+        setColorReplaceState(null);
+        return;
+    }
+
     setProcessingImages(imagesToProcess.map(img => img.name));
     setColorReplaceState(null);
     try {
         const updatePromises = imagesToProcess.map(image => changeImageColor(image.blob, sourceColor, newTargetColor).then(newBlob => ({ name: image.name, blob: newBlob, status: 'fulfilled' as const })).catch(error => ({ name: image.name, error, status: 'rejected' as const })));
         const results = await Promise.all(updatePromises);
         const successfulUpdates = results.filter((r): r is { name: string; blob: Blob; status: 'fulfilled' } => r.status === 'fulfilled');
-        const updatedBlobs = new Map<string, Blob>();
-        successfulUpdates.forEach(update => { updatedBlobs.set(update.name, update.blob); onImageUpdate(update.name, update.blob); });
-        if (successfulUpdates.length > 0) {
-            const nextImagesState = images.map(img => { const updatedBlob = updatedBlobs.get(img.name); return updatedBlob ? { ...img, blob: updatedBlob } : img; });
-            await onColorChange(nextImagesState);
-        }
+        successfulUpdates.forEach(update => { onImageUpdate(update.name, update.blob); });
     } catch (err) { setEditError('Wystąpił błąd podczas zmiany kolorów.'); } finally { setProcessingImages([]); }
   };
 
@@ -199,6 +246,7 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
           const isSelectingSource = colorReplaceState?.stage === 'selecting-source' && colorReplaceState.imageName === image.name;
           const isSelectingTarget = colorReplaceState?.stage === 'selecting-target' && colorReplaceState.imageName === image.name;
           const isProcessing = processingImages.includes(image.name);
+          const hasBlob = !!image.blob;
 
           return (
             <div key={image.name} className="relative group aspect-square bg-gray-900/50 rounded-lg overflow-hidden border border-gray-700">
@@ -206,11 +254,25 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
                 <img 
                   src={imageUrls[image.name]} 
                   alt={image.name} 
-                  className={`w-full h-full object-contain p-1 ${isSelectingSource ? 'cursor-crosshair' : ''}`}
+                  className={`w-full h-full object-contain p-1 ${isSelectingSource ? 'cursor-crosshair' : ''} ${!hasBlob ? 'opacity-90' : ''}`}
                   onClick={(e) => handleSourceColorSelect(e, image)}
-                  crossOrigin="anonymous" 
+                  onError={() => {
+                      // Fallback error handling
+                      console.warn(`Failed to load image: ${image.name}`);
+                      setEditError(`Błąd ładowania: ${image.name}`);
+                  }}
+                  // Removed crossOrigin="anonymous" to prevent CORS errors on display
                 />}
               
+              {!hasBlob && !isProcessing && (
+                  <div className="absolute top-2 right-2" title="Pobieranie w tle...">
+                      <span className="flex h-3 w-3 relative">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
+                        <span className="relative inline-flex rounded-full h-3 w-3 bg-cyan-500"></span>
+                      </span>
+                  </div>
+              )}
+
               {isProcessing && (
                   <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center text-center">
                       <svg className="animate-spin h-8 w-8 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
@@ -242,8 +304,8 @@ export const SelectedImagesPreview: React.FC<SelectedImagesPreviewProps> = ({ im
 
               {!isProcessing && !colorReplaceState && (
                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-2">
-                  <button onClick={() => handleInitiateColorReplace(image.name)} className="p-2 rounded-full bg-orange-500/80 hover:bg-orange-500 text-white" title="Kolor"><svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" /></svg></button>
-                  <button onClick={() => handleAddWhiteBg(image)} className="p-2 rounded-full bg-purple-500/80 hover:bg-purple-500 text-white" title="Tło">🪄</button>
+                  <button onClick={() => handleInitiateColorReplace(image.name)} className="p-2 rounded-full bg-orange-500/80 hover:bg-orange-500 text-white disabled:opacity-50 disabled:cursor-not-allowed" disabled={!hasBlob} title={hasBlob ? "Zmień Kolor" : "Czekaj na pobranie..."}><svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path d="M7 21a4 4 0 01-4-4V5a2 2 0 012-2h4a2 2 0 012 2v12a4 4 0 01-4 4zm0 0h12a2 2 0 002-2v-4a2 2 0 00-2-2h-2.343M11 7.343l1.657-1.657a2 2 0 012.828 0l2.829 2.829a2 2 0 010 2.828l-8.486 8.485M7 17h.01" /></svg></button>
+                  <button onClick={() => handleAddWhiteBg(image)} className="p-2 rounded-full bg-purple-500/80 hover:bg-purple-500 text-white disabled:opacity-50 disabled:cursor-not-allowed" disabled={!hasBlob} title={hasBlob ? "Usuń Tło" : "Czekaj na pobranie..."}>🪄</button>
                   {onRegenerate && (
                     <button onClick={() => handleRegenerate(index, image.name)} className="p-2 rounded-full bg-blue-500/80 hover:bg-blue-500 text-white" title="Regeneruj">🔄</button>
                   )}

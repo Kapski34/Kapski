@@ -46,9 +46,10 @@ const isLikelyImage = (url: string) => {
     if (u.includes('cdn')) return true;
     if (u.includes('content')) return true; // CMS content
     
-    // Allow Google Images thumbnails (reliable fallback)
+    // Allow Google Images thumbnails and content (reliable fallback)
     if (u.includes('encrypted-tbn')) return true;
     if (u.includes('gstatic.com')) return true;
+    if (u.includes('googleusercontent.com')) return true;
     
     return false;
 };
@@ -62,8 +63,11 @@ const parseJsonResponse = (responseText: string) => {
     return JSON.parse(jsonStr);
   } catch (e) {
     const titleMatch = responseText.match(/(?:title|name|nazwa|produkt)":\s*"([^"]+)"/i);
-    // Extract all http links
-    const urls: string[] = responseText.match(/https?:\/\/[^\s"']+/gi) || [];
+    
+    // Clean escaped slashes in the whole text before regex matching to catch https:\/\/ URLs
+    const cleanText = responseText.replace(/\\/g, '');
+    const urls: string[] = cleanText.match(/https?:\/\/[^\s"']+/gi) || [];
+    
     // Filter strictly for things that look like images
     const validUrls = urls.filter(isLikelyImage);
     
@@ -90,45 +94,64 @@ const fileToGenerativePart = async (file: Blob | File): Promise<{ inlineData: { 
   return { inlineData: { data: base64EncodedData, mimeType: file.type || 'image/png' } };
 };
 
-export const fetchImageFromUrl = async (url: string): Promise<Blob> => {
-    if (!url || !url.startsWith('http')) throw new Error("Invalid URL");
-    
-    const t = Date.now();
-    // Prioritize high-performance image proxies
-    const proxyUrls = [
-        `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png&t=${t}`,
-        `https://images.weserv.nl/?url=${encodeURIComponent(url)}&output=png&t=${t}`,
-        `https://imagecdn.app/v2/image/${encodeURIComponent(url)}?format=png`,
-        `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-        `https://corsproxy.io/?${encodeURIComponent(url)}`,
-        `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-        url
-    ];
+// Robust Fetcher with Fallbacks
+export async function fetchImageFromUrl(url: string, timeoutMs = 12000): Promise<Blob> {
+  const fetchWithTimeout = async (targetUrl: string) => {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+          const res = await fetch(targetUrl, { signal: controller.signal });
+          clearTimeout(id);
+          if (!res.ok) throw new Error(`HTTP Error ${res.status}`);
+          const blob = await res.blob();
+          
+          // Filter out tiny error images or empty responses (1x1 pixels)
+          if (blob.size < 50) throw new Error("File too small/corrupt");
+          
+          // Relaxed type check - some proxies don't send correct headers
+          // We trust the blob if it has size.
+          return blob;
+      } catch (e) {
+          clearTimeout(id);
+          throw e;
+      }
+  };
 
-    for (const pUrl of proxyUrls) {
-        try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 8000); 
-            
-            const res = await fetch(pUrl, { 
-                cache: 'no-store', 
-                signal: controller.signal
-            });
-            
-            clearTimeout(timeoutId);
-            
-            if (res.ok) {
-                const blob = await res.blob();
-                if (blob.size > 200) { // Lowered threshold for thumbnails
-                    return blob; 
-                }
-            }
-        } catch (e) { 
-            continue; 
-        }
-    }
-    throw new Error("Failed to fetch image");
-};
+  // STRATEGY 1: Google Focus Proxy (Extremely reliable for static assets)
+  try {
+      const target = `https://images1-focus-opensocial.googleusercontent.com/gadgets/proxy?container=focus&refresh=2592000&url=${encodeURIComponent(url)}`;
+      return await fetchWithTimeout(target);
+  } catch (e) {
+      console.warn(`Google Focus proxy failed for ${url}, trying next...`);
+  }
+
+  // STRATEGY 2: Wsrv.nl (Best for images - acts as a CDN/Processor)
+  try {
+      // Pass full URL to wsrv.nl
+      const target = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=jpg`;
+      return await fetchWithTimeout(target);
+  } catch (e) {
+      console.warn(`Wsrv proxy failed for ${url}, trying next...`);
+  }
+
+  // STRATEGY 3: CorsProxy.io (Standard transparent proxy)
+  try {
+      const target = url.includes('corsproxy.io') ? url : `https://corsproxy.io/?${encodeURIComponent(url)}`;
+      return await fetchWithTimeout(target);
+  } catch (e) {
+      console.warn(`Corsproxy failed for ${url}, trying next...`);
+  }
+
+  // STRATEGY 4: AllOrigins (Another backup transparent proxy)
+  try {
+      const target = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+      return await fetchWithTimeout(target);
+  } catch (e) {
+      console.warn(`AllOrigins proxy failed for ${url}, trying next...`);
+  }
+
+  throw new Error("Failed to fetch image from all available proxies.");
+}
 
 export const verifyVisualIdentity = async (blob: Blob, title: string, url?: string): Promise<boolean> => {
     try {
@@ -148,7 +171,7 @@ export const verifyVisualIdentity = async (blob: Blob, title: string, url?: stri
                                  1. ACCEPTS: The product itself, its packaging (box), the product inside packaging, or the product in a lifestyle setting.
                                  2. ACCEPTS: Close-ups, different angles, color variations, or if the product is visible but small.
                                  3. REJECTS: Completely unrelated objects (e.g. searching for 'headphones' but seeing a 'toaster', 'car', or 'dress').
-                                 4. REJECTS: Clearly broken images, error placeholders, or tiny generic icons.
+                                 4. REJECTS: Clearly broken images, error placeholders, text-only logos, or tiny generic icons.
                                  
                                  Does this image likely represent the product "${title}" or its packaging?
                                  If you are unsure, Answer YES.
@@ -317,7 +340,8 @@ export const generateContentFromEan = async (ean: string, manualTitle?: string):
         .filter(isLikelyImage);
     
     // Aggressive text regex extraction - ONLY if they look like images
-    const allTextLinks = (text.match(/https?:\/\/[^\s"']+/gi) || [])
+    const cleanText = text.replace(/\\/g, ''); // Ensure no escaped slashes
+    const allTextLinks = (cleanText.match(/https?:\/\/[^\s"']+/gi) || [])
         .filter(isLikelyImage);
     
     // Combine everything
@@ -402,4 +426,28 @@ export const analyzePricing = async (i: Blob, title: string): Promise<{ products
 };
 
 export const verifyAndFilterImages = async (i: any, t: string, v: string) => [];
-export const generateStudioProImages = async (f: File, p: string, c: number) => [];
+export const generateStudioProImages = async (f: File, p: string, c: number) => {
+    try {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const imagePart = await fileToGenerativePart(f);
+        
+        const tasks = Array.from({ length: c }).map(async (_, i) => {
+            const response = await retryWithBackoff(async () => {
+                return await ai.models.generateContent({
+                    model: 'gemini-2.5-flash-image',
+                    contents: { parts: [imagePart, { text: `Professional product photography. ${p}` }] }
+                });
+            }, 3, 3000);
+            
+            const part = response.candidates?.[0]?.content?.parts?.find(part => part.inlineData);
+            if (part?.inlineData) {
+                const res = await fetch(`data:${part.inlineData.mimeType};base64,${part.inlineData.data}`);
+                return { name: `studio_${i+1}.png`, blob: await res.blob() };
+            }
+            return null;
+        });
+        
+        const results = await Promise.all(tasks);
+        return results.filter((r): r is { name: string; blob: Blob } => r !== null);
+    } catch (e) { return []; }
+};

@@ -1,11 +1,12 @@
+
 import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { AuthModal } from './AuthModal';
 import { TokenStore } from './TokenStore';
 
 interface HeaderProps {
-    activeView: 'app' | 'features' | 'pricing';
-    onViewChange: (view: 'app' | 'features' | 'pricing') => void;
+    activeView: 'app' | 'features' | 'pricing' | 'settings';
+    onViewChange: (view: 'app' | 'features' | 'pricing' | 'settings') => void;
     onOpenStore: () => void;
 }
 
@@ -16,8 +17,18 @@ export const Header: React.FC<HeaderProps> = ({ activeView, onViewChange, onOpen
   return (
     <>
     <header className="w-full mb-8 flex flex-col relative z-10">
-       {/* User Controls - Pasek na samej górze, wyrównany do prawej */}
-       <div className="w-full flex justify-end items-center gap-3 mb-2 min-h-[40px]">
+       {/* TOP BAR: Settings (Left) & User Controls (Right) */}
+       <div className="w-full flex justify-between items-center gap-3 mb-2 min-h-[40px]">
+            {/* SETTINGS BUTTON (LEFT TOP) */}
+            <button
+                onClick={() => onViewChange('settings')}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all ${activeView === 'settings' ? 'bg-slate-700 border-slate-500 text-white' : 'bg-slate-900/50 border-gray-700 text-gray-400 hover:text-white hover:bg-slate-800'}`}
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924-1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+                Ustawienia
+            </button>
+
+            {/* USER CONTROLS (RIGHT TOP) */}
             {user ? (
                 <div className="flex items-center gap-3 bg-slate-900/80 p-1.5 pr-4 rounded-full border border-gray-700 backdrop-blur-sm">
                     {/* Avatar */}
@@ -87,25 +98,35 @@ export const Header: React.FC<HeaderProps> = ({ activeView, onViewChange, onOpen
             </nav>
        </div>
 
-      <div 
-        className="text-center cursor-pointer hover:opacity-90 transition-opacity" 
-        onClick={() => onViewChange('app')}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onViewChange('app'); }}
-      >
-        <div className="flex items-center justify-center gap-3">
-          <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">
-            Generator Opisów Aukcji
-          </h1>
-          <span className="text-xs font-bold text-slate-900 bg-cyan-400 rounded-full px-2 py-0.5">AI</span>
-        </div>
-        <p className="mt-3 text-lg text-gray-400 max-w-2xl mx-auto">
-            {activeView === 'app' && "Wgraj plik modelu 3D lub zdjęcie, aby AI wygenerowało profesjonalny opis produktu."}
-            {activeView === 'features' && "Poznaj narzędzia, które zautomatyzują Twoją sprzedaż na Allegro."}
-            {activeView === 'pricing' && "Wybierz pakiet tokenów dopasowany do Twoich potrzeb."}
-        </p>
-      </div>
+      {/* Show Title only when NOT in settings to keep UI clean */}
+      {activeView !== 'settings' && (
+          <div 
+            className="text-center cursor-pointer hover:opacity-90 transition-opacity" 
+            onClick={() => onViewChange('app')}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') onViewChange('app'); }}
+          >
+            <div className="flex items-center justify-center gap-3">
+              <h1 className="text-4xl sm:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-blue-500">
+                Generator Opisów Aukcji
+              </h1>
+              <span className="text-xs font-bold text-slate-900 bg-cyan-400 rounded-full px-2 py-0.5">AI</span>
+            </div>
+            <p className="mt-3 text-lg text-gray-400 max-w-2xl mx-auto">
+                {activeView === 'app' && "Wgraj plik modelu 3D lub zdjęcie, aby AI wygenerowało profesjonalny opis produktu."}
+                {activeView === 'features' && "Poznaj narzędzia, które zautomatyzują Twoją sprzedaż na Allegro."}
+                {activeView === 'pricing' && "Wybierz pakiet tokenów dopasowany do Twoich potrzeb."}
+            </p>
+          </div>
+      )}
+      
+      {activeView === 'settings' && (
+          <div className="text-center mb-6">
+              <h1 className="text-3xl font-extrabold text-white">Ustawienia Aplikacji</h1>
+              <p className="text-gray-400 mt-2">Zarządzaj kontem i kluczami integracji</p>
+          </div>
+      )}
     </header>
     
     <AuthModal isOpen={isAuthOpen} onClose={() => setIsAuthOpen(false)} />
